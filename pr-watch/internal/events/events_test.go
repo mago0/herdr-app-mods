@@ -120,3 +120,34 @@ func TestNextAndDisplayOf(t *testing.T) {
 		t.Errorf("DisplayOf = %+v", got)
 	}
 }
+
+func TestClassifyApprovalOrDismissedWithBodySilent(t *testing.T) {
+	cur := github.PR{State: "OPEN", Items: []github.Item{
+		item("1", "review", "alice", false, "APPROVED", "LGTM"),
+		item("2", "review", "bob", false, "DISMISSED", "old concerns"),
+		item("3", "thread_comment", "alice", false, "", "one nit on the approval"),
+	}}
+	want := []Event{{"comment", "thread_comment from alice"}}
+	if evs := Classify(registry.Last{State: "OPEN"}, cur, "mago0"); !reflect.DeepEqual(evs, want) {
+		t.Fatalf("got %+v", evs)
+	}
+}
+
+func TestClassifyCIErrorIsFailing(t *testing.T) {
+	cur := github.PR{State: "OPEN", CI: "ERROR", HeadSHA: "a1b2c3d4e5", FailingChecks: []string{"ci/legacy"}}
+	want := []Event{{"ci_failing", "CI failing on a1b2c3d (ci/legacy)"}}
+	if evs := Classify(registry.Last{State: "OPEN"}, cur, "v"); !reflect.DeepEqual(evs, want) {
+		t.Fatalf("got %+v", evs)
+	}
+	if again := Classify(Next(registry.Last{}, cur), cur, "v"); len(again) != 0 {
+		t.Fatalf("second pass: %+v", again)
+	}
+}
+
+func TestClassifyCINoCheckNames(t *testing.T) {
+	cur := github.PR{State: "OPEN", CI: "FAILURE", HeadSHA: "abc1234567"}
+	want := []Event{{"ci_failing", "CI failing on abc1234"}}
+	if evs := Classify(registry.Last{State: "OPEN"}, cur, "v"); !reflect.DeepEqual(evs, want) {
+		t.Fatalf("got %+v", evs)
+	}
+}

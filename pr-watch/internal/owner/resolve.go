@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -72,10 +73,39 @@ func Resolve(env func(string) string, c hc.Client, claudeSessionsDir string, pro
 		}
 	}
 
-	if o.Cwd, err = os.Getwd(); err != nil {
+	// The agent process's folder, not herdr-pr's: the mod links from the app's folder and agents cd around.
+	o.Cwd = t.Cwd
+	if t.Foreground != nil && t.Foreground.Cwd != "" {
+		o.Cwd = t.Foreground.Cwd
+	}
+	wd, err := os.Getwd()
+	if err != nil {
 		return registry.Owner{}, err
 	}
+	o.Worktree = worktree(wd)
 	return o, nil
+}
+
+// worktree is the git worktree root holding dir. Home is never one, so a link from
+// the mod (which runs in the app's folder) or a dotfiles repo is not offered for removal.
+func worktree(dir string) string {
+	home, _ := os.UserHomeDir()
+	if dir == home {
+		return ""
+	}
+	if root := gitToplevel(dir); root != home {
+		return root
+	}
+	return ""
+}
+
+// gitToplevel is `git rev-parse --show-toplevel` in dir, or "" outside git. Tests replace it.
+var gitToplevel = func(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // inProcessChild reports whether the pi session calling herdr-pr is not the terminal's own pi.

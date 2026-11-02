@@ -36,6 +36,9 @@ func TestBuildQueryAliases(t *testing.T) {
 			t.Errorf("query missing %q:\n%s", want, q)
 		}
 	}
+	if !strings.Contains(q, "viewer { login }") {
+		t.Errorf("query lacks the viewer:\n%s", q)
+	}
 	wantIdx := map[string]string{
 		"r0.pr0": "https://github.com/cli/cli/pull/1",
 		"r0.pr1": "https://github.com/cli/cli/pull/2",
@@ -53,10 +56,11 @@ func TestParse(t *testing.T) {
 	}
 	merged := ref(t, "https://github.com/cli/cli/pull/14801")
 	open := ref(t, "https://github.com/cli/cli/pull/14783")
-	got, err := Parse(body, []prurl.Ref{merged, open})
+	b, err := Parse(body, []prurl.Ref{merged, open})
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := b.PRs
 	m, ok := got[merged.URL()]
 	if !ok || m.State != "MERGED" {
 		t.Fatalf("merged PR = %+v (present %v)", m, ok)
@@ -95,10 +99,11 @@ func TestParse(t *testing.T) {
 func TestParseMissingPR(t *testing.T) {
 	body := []byte(`{"data":{"r0":{"pr0":null,"pr1":{"url":"https://github.com/cli/cli/pull/2","title":"t","state":"OPEN","isDraft":false,"mergeable":"UNKNOWN","reviewDecision":null,"commits":{"nodes":[]},"reviews":{"nodes":[]},"comments":{"nodes":[]},"reviewThreads":{"nodes":[]}}}}}`)
 	refs := []prurl.Ref{ref(t, "https://github.com/cli/cli/pull/1"), ref(t, "https://github.com/cli/cli/pull/2")}
-	got, err := Parse(body, refs)
+	b, err := Parse(body, refs)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := b.PRs
 	if _, ok := got[refs[0].URL()]; ok {
 		t.Error("missing PR should be absent")
 	}
@@ -122,11 +127,11 @@ func TestParseChecksAndItems(t *testing.T) {
 "reviewThreads":{"nodes":[{"comments":{"nodes":[{"id":"T1","body":"nit","author":{"login":"bob","__typename":"User"}}]}}]}
 }}}}`)
 	r := ref(t, "https://github.com/o/n/pull/1")
-	got, err := Parse(body, []prurl.Ref{r})
+	b, err := Parse(body, []prurl.Ref{r})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pr := got[r.URL()]
+	pr := b.PRs[r.URL()]
 	if !pr.Draft || pr.Mergeable != "CONFLICTING" || pr.ReviewDecision != "CHANGES_REQUESTED" || pr.HeadSHA != "abc" || pr.CI != "FAILURE" {
 		t.Errorf("scalar fields wrong: %+v", pr)
 	}
@@ -141,5 +146,16 @@ func TestParseChecksAndItems(t *testing.T) {
 	}
 	if !reflect.DeepEqual(pr.Items, want) {
 		t.Errorf("Items = %+v, want %+v", pr.Items, want)
+	}
+}
+
+func TestParseViewer(t *testing.T) {
+	body := []byte(`{"data":{"viewer":{"login":"mago0"},"r0":{"pr0":null}}}`)
+	b, err := Parse(body, []prurl.Ref{ref(t, "https://github.com/cli/cli/pull/1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Viewer != "mago0" || len(b.PRs) != 0 {
+		t.Errorf("batch = %+v", b)
 	}
 }

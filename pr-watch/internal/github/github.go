@@ -39,11 +39,16 @@ type PR struct {
 	Items             []Item
 }
 
-// Fetcher reads PR state. Fetch keys its result by prurl.Ref.URL(); a PR
-// missing upstream is absent from the map, not an error.
+// Batch is one query's answer: PRs keyed by prurl.Ref.URL() and the gh login asking.
+// A PR missing upstream is absent from PRs, not an error.
+type Batch struct {
+	PRs    map[string]PR
+	Viewer string
+}
+
+// Fetcher reads PR state in one GraphQL request.
 type Fetcher interface {
-	Fetch(ctx context.Context, refs []prurl.Ref) (map[string]PR, error)
-	Viewer(ctx context.Context) (string, error)
+	Fetch(ctx context.Context, refs []prurl.Ref) (Batch, error)
 }
 
 //go:embed query.graphql
@@ -65,39 +70,17 @@ func gh(ctx context.Context, query string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-func (ghFetcher) Fetch(ctx context.Context, refs []prurl.Ref) (map[string]PR, error) {
-	if len(refs) == 0 {
-		return map[string]PR{}, nil
-	}
+func (ghFetcher) Fetch(ctx context.Context, refs []prurl.Ref) (Batch, error) {
 	q, _ := buildQuery(refs)
 	out, err := gh(ctx, q)
 	if err != nil {
 		// A deleted PR or repo is a NOT_FOUND error; Parse accepts those.
-		if prs, perr := Parse(out, refs); perr == nil {
-			return prs, nil
+		if b, perr := Parse(out, refs); perr == nil {
+			return b, nil
 		}
-		return nil, err
+		return Batch{}, err
 	}
 	return Parse(out, refs)
-}
-
-func (ghFetcher) Viewer(ctx context.Context) (string, error) {
-	out, err := gh(ctx, "{ viewer { login } }")
-	if err != nil {
-		return "", err
-	}
-	var resp struct {
-		Data struct {
-			Viewer struct{ Login string }
-		}
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return "", fmt.Errorf("github: parse viewer: %w", err)
-	}
-	if resp.Data.Viewer.Login == "" {
-		return "", fmt.Errorf("github: viewer login missing")
-	}
-	return resp.Data.Viewer.Login, nil
 }
 
 // buildQuery emits one aliased repository block per repo (r0, r1, ...) with one
@@ -113,7 +96,7 @@ func buildQuery(refs []prurl.Ref) (string, map[string]string) {
 	}
 	idx := map[string]string{}
 	var b strings.Builder
-	b.WriteString("query {\n")
+	b.WriteString("query {\n  viewer { login }\n")
 	for i, repo := range order {
 		group := byRepo[repo]
 		fmt.Fprintf(&b, "  r%d: repository(owner: %q, name: %q) {\n", i, group[0].Owner, group[0].Name)
@@ -187,35 +170,58 @@ type rawPR struct {
 
 // Parse decodes a response to buildQuery(refs). PRs that GitHub reports as
 // missing (null alias or NOT_FOUND error) are left out of the result.
-func Parse(body []byte, refs []prurl.Ref) (map[string]PR, error) {
+func Parse(body []byte, refs []prurl.Ref) (Batch, error) {
 	var resp struct {
-		Data   map[string]map[string]*rawPR `json:"data"`
+		Data   map[string]json.RawMessage `json:"data"`
 		Errors []struct {
 			Type    string `json:"type"`
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("github: parse response: %w", err)
+		return Batch{}, fmt.Errorf("github: parse response: %w", err)
 	}
 	for _, e := range resp.Errors {
 		if e.Type != "NOT_FOUND" {
-			return nil, fmt.Errorf("github: graphql error: %s", e.Message)
+			return Batch{}, fmt.Errorf("github: graphql error: %s", e.Message)
 		}
 	}
+	out := Batch{PRs: map[string]PR{}}
+	if v := resp.Data["viewer"]; v != nil {
+		var viewer struct{ Login string }
+		if err := json.Unmarshal(v, &viewer); err != nil {
+			return Batch{}, fmt.Errorf("github: parse viewer: %w", err)
+		}
+		out.Viewer = viewer.Login
+	}
+	repos := map[string]map[string]*rawPR{}
 	_, idx := buildQuery(refs)
-	out := map[string]PR{}
 	for key, url := range idx {
 		r, p, _ := strings.Cut(key, ".")
-		raw := resp.Data[r][p]
+		if _, ok := repos[r]; !ok {
+			var prs map[string]*rawPR
+			if err := json.Unmarshal(orNull(resp.Data[r]), &prs); err != nil {
+				return Batch{}, fmt.Errorf("github: parse %s: %w", r, err)
+			}
+			repos[r] = prs
+		}
+		raw := repos[r][p]
 		if raw == nil {
 			continue
 		}
 		pr := convert(raw)
 		pr.URL = url
-		out[url] = pr
+		out.PRs[url] = pr
 	}
 	return out, nil
+}
+
+// orNull treats a missing alias like a null one.
+func orNull(m json.RawMessage) json.RawMessage {
+	if m == nil {
+		return json.RawMessage("null")
+	}
+	return m
 }
 
 func convert(raw *rawPR) PR {

@@ -33,6 +33,8 @@ func sha7(s string) string {
 	return s
 }
 
+func failing(ci string) bool { return ci == "FAILURE" || ci == "ERROR" }
+
 // Classify compares the last seen state with the current PR. Only new items,
 // a new failing head SHA, a new conflict or a state change produce events.
 func Classify(prev registry.Last, cur github.PR, viewer string) []Event {
@@ -44,12 +46,18 @@ func Classify(prev registry.Last, cur github.PR, viewer string) []Event {
 		switch {
 		case it.Kind == "review" && it.State == "CHANGES_REQUESTED":
 			evs = append(evs, Event{ChangesRequested, fmt.Sprintf("review from %s: changes requested", it.Author.Login)})
+		// Approvals are not actionable, even with a body; their inline comments are separate items.
+		case it.Kind == "review" && (it.State == "APPROVED" || it.State == "DISMISSED"):
 		case strings.TrimSpace(it.Body) != "" && !isBot(it.Author) && it.Author.Login != viewer:
 			evs = append(evs, Event{Comment, fmt.Sprintf("%s from %s", it.Kind, it.Author.Login)})
 		}
 	}
-	if cur.CI == "FAILURE" && cur.HeadSHA != prev.CIFailingSHA {
-		evs = append(evs, Event{CIFailing, fmt.Sprintf("CI failing on %s (%s)", sha7(cur.HeadSHA), strings.Join(cur.FailingChecks, ", "))})
+	if failing(cur.CI) && cur.HeadSHA != prev.CIFailingSHA {
+		text := "CI failing on " + sha7(cur.HeadSHA)
+		if len(cur.FailingChecks) > 0 {
+			text += " (" + strings.Join(cur.FailingChecks, ", ") + ")"
+		}
+		evs = append(evs, Event{CIFailing, text})
 	}
 	if cur.Mergeable == "CONFLICTING" && !prev.Conflicting {
 		evs = append(evs, Event{Conflict, "merge conflict with the base branch"})
@@ -75,7 +83,7 @@ func Next(prev registry.Last, cur github.PR) registry.Last {
 	for _, it := range cur.Items {
 		l.SeenIDs = append(l.SeenIDs, it.ID)
 	}
-	if cur.CI == "FAILURE" {
+	if failing(cur.CI) {
 		l.CIFailingSHA = cur.HeadSHA
 	}
 	return l

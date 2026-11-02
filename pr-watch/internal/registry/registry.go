@@ -20,7 +20,8 @@ type Owner struct {
 	Kind            string // "pi" or "claude"
 	SessionID       string
 	SessionFile     string
-	Cwd             string
+	Cwd             string // where the agent runs; revival resumes here
+	Worktree        string // git worktree root herdr-pr was linked from; empty from home or outside git
 	Space           string
 	Tab             string
 	Parent          string
@@ -94,6 +95,10 @@ func Load(path string) (*Registry, error) {
 	}
 	if r.Version == 0 {
 		r.Version = 1
+	}
+	// An older binary must not rewrite a format it does not know.
+	if r.Version > 1 {
+		return nil, fmt.Errorf("registry: %s has version %d; this herdr-pr reads version 1", path, r.Version)
 	}
 	return r, nil
 }

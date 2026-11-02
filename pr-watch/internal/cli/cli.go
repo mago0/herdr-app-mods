@@ -127,17 +127,19 @@ func (c *cmd) link(args []string) error {
 		return err
 	}
 	// Priming from current state means only later changes can wake the owner.
-	prs, err := c.d.GH.Fetch(context.Background(), []prurl.Ref{ref})
+	b, err := c.d.GH.Fetch(context.Background(), []prurl.Ref{ref})
 	if err != nil {
 		return err
 	}
-	pr, ok := prs[ref.URL()]
+	pr, ok := b.PRs[ref.URL()]
 	if !ok {
 		return fmt.Errorf("%s not found on GitHub", ref.URL())
 	}
+	// A PR that is already merged or closed is never fetched again, so a watch on it would never end.
+	watching := *watch && pr.State == "OPEN"
 	e := registry.Entry{
 		URL: ref.URL(), Repo: ref.Repo(), Number: ref.Number,
-		Owner: o, Watched: *watch, LinkedAt: c.d.Now(),
+		Owner: o, Watched: watching, LinkedAt: c.d.Now(),
 		Display: events.DisplayOf(pr), Last: events.Next(registry.Last{}, pr), Primed: true,
 	}
 	err = registry.Update(c.d.StatePath, func(r *registry.Registry) error {
@@ -147,7 +149,7 @@ func (c *cmd) link(args []string) error {
 		} else if err != nil {
 			return err
 		}
-		if *watch {
+		if watching {
 			r.Find(e.URL).Watched = true
 		}
 		return nil
@@ -156,8 +158,11 @@ func (c *cmd) link(args []string) error {
 		return err
 	}
 	note := ""
-	if *watch {
+	switch {
+	case watching:
 		note = ", watching"
+	case *watch:
+		note = "; not watching: the PR is " + strings.ToLower(pr.State)
 	}
 	fmt.Fprintf(c.out, "[herdr-pr] linked %s#%d to %s%s\n", ref.Repo(), ref.Number, describe(o), note)
 	return nil

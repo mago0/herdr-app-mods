@@ -19,13 +19,10 @@ case "$1" in
 esac
 FAKE
 
-# Fake gh: the viewer query and the batched PR query, answered from fixtures.
+# Fake gh: the one batched query (viewer and PRs), answered from a fixture.
 cat >"$work/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
-case "$4" in
-  *viewer*) echo '{"data":{"viewer":{"login":"me"}}}' ;;
-  *) cat "$FAKE/pr.json" ;;
-esac
+cat "$FAKE/pr.json"
 FAKE
 
 # Fake pi: the nearest pi ancestor of herdr-pr, so the result does not depend on who runs
@@ -44,7 +41,7 @@ JSON
 
 pr() { # pr <reviews-json>
   cat >"$work/fake/pr.json" <<JSON
-{"data":{"r0":{"pr0":{"url":"https://github.com/acme/widgets/pull/7","title":"Add widget","state":"OPEN",
+{"data":{"viewer":{"login":"me"},"r0":{"pr0":{"url":"https://github.com/acme/widgets/pull/7","title":"Add widget","state":"OPEN",
 "isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"","commits":{"nodes":[{"commit":{"oid":"abc1234567","statusCheckRollup":null}}]},
 "reviews":{"nodes":$1},"comments":{"nodes":[]},"reviewThreads":{"nodes":[]}}}}}
 JSON
@@ -56,6 +53,10 @@ url=https://github.com/acme/widgets/pull/7
 
 pr '[]'
 pi herdr-pr link "$url" --watch
+
+# Baseline: nothing changed since link, so nothing is sent.
+herdr-pr poll
+[ ! -s "$FAKE/hc.log" ] || { echo "smoke: FAIL: baseline poll sent"; cat "$FAKE/hc.log"; exit 1; }
 
 pr '[{"id":"R1","state":"CHANGES_REQUESTED","body":"fix it","author":{"login":"alice","__typename":"User"}}]'
 herdr-pr poll

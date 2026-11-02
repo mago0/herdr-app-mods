@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/events"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/hc"
@@ -35,11 +36,27 @@ func TestParentFYIExact(t *testing.T) {
 	}
 }
 
-func TestFinalAndWorktreeNotes(t *testing.T) {
-	if got, want := FinalNote(entry, "merged"), "[herdr-pr] flocasts/iam#412 was merged. Watch ended."; got != want {
+func TestFinalOwnerMessageExact(t *testing.T) {
+	if got, want := FinalOwnerMessage(entry, "merged", nil, ""), "[herdr-pr] flocasts/iam#412 was merged. Watch ended."; got != want {
 		t.Errorf("got %q", got)
 	}
-	if got, want := WorktreeNote("/w/x"), "[herdr-pr] FYI: worktree /w/x has no open PRs left and can be removed."; got != want {
+	others := []events.Event{{Kind: "comment", Text: "comment from bob"}}
+	want := "[herdr-pr] flocasts/iam#412 was closed. Watch ended.\n" +
+		"- comment from bob\n" +
+		"FYI: worktree /w/_worktrees/x has no open PRs left and can be removed."
+	if got := FinalOwnerMessage(entry, "closed", others, "/w/_worktrees/x"); got != want {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestFinalParentMessageExact(t *testing.T) {
+	want := "[herdr-pr] FYI, no action needed: flocasts/iam#412 (child t7) was merged. Watch ended."
+	if got := FinalParentMessage(entry, "merged", "t7", ""); got != want {
+		t.Errorf("got %q", got)
+	}
+	want = "[herdr-pr] FYI, no action needed: flocasts/iam#412 (child background child) was closed. Watch ended.\n" +
+		"FYI: worktree /w/_worktrees/x has no open PRs left and can be removed."
+	if got := FinalParentMessage(entry, "closed", "", "/w/_worktrees/x"); got != want {
 		t.Errorf("got %q", got)
 	}
 }
@@ -63,40 +80,42 @@ type status = struct {
 	State string `json:"state"`
 }
 
+var now = time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+
 func live(state string) hc.Terminal {
 	return hc.Terminal{State: "live", CreatedMs: 5, Status: &status{State: state}}
 }
 
 func TestCheckCreatedMsMismatchIsGone(t *testing.T) {
-	got, _, err := Check(&fakeHC{term: live("idle")}, "t1", 6)
+	got, _, err := Check(&fakeHC{term: live("idle")}, "t1", 6, now)
 	if err != nil || got != Gone {
 		t.Errorf("got %v %v", got, err)
 	}
 }
 
 func TestCheckWorkingIsBusy(t *testing.T) {
-	got, _, err := Check(&fakeHC{term: live("working")}, "t1", 5)
+	got, _, err := Check(&fakeHC{term: live("working")}, "t1", 5, now)
 	if err != nil || got != Busy {
 		t.Errorf("got %v %v", got, err)
 	}
 }
 
 func TestCheckIdleIsLive(t *testing.T) {
-	got, term, err := Check(&fakeHC{term: live("idle")}, "t1", 5)
+	got, term, err := Check(&fakeHC{term: live("idle")}, "t1", 5, now)
 	if err != nil || got != Live || term.CreatedMs != 5 {
 		t.Errorf("got %v %v", got, err)
 	}
 }
 
 func TestCheckNotFoundIsGone(t *testing.T) {
-	got, _, err := Check(&fakeHC{getErr: hc.ErrNotFound}, "t1", 5)
+	got, _, err := Check(&fakeHC{getErr: hc.ErrNotFound}, "t1", 5, now)
 	if err != nil || got != Gone {
 		t.Errorf("got %v %v", got, err)
 	}
 }
 
 func TestCheckOtherErrorReturned(t *testing.T) {
-	if _, _, err := Check(&fakeHC{getErr: os.ErrPermission}, "t1", 5); err == nil {
+	if _, _, err := Check(&fakeHC{getErr: os.ErrPermission}, "t1", 5, now); err == nil {
 		t.Error("want error")
 	}
 }
@@ -104,7 +123,7 @@ func TestCheckOtherErrorReturned(t *testing.T) {
 func TestCheckNotLiveIsGone(t *testing.T) {
 	term := live("idle")
 	term.State = "exited"
-	if got, _, err := Check(&fakeHC{term: term}, "t1", 5); err != nil || got != Gone {
+	if got, _, err := Check(&fakeHC{term: term}, "t1", 5, now); err != nil || got != Gone {
 		t.Errorf("got %v %v", got, err)
 	}
 }
@@ -112,13 +131,8 @@ func TestCheckNotLiveIsGone(t *testing.T) {
 func TestCheckShellForegroundIsGone(t *testing.T) {
 	for _, sh := range []string{"zsh", "bash", "sh", "fish", "dash"} {
 		term := live("idle")
-		term.Foreground = &struct {
-			Name string   `json:"name"`
-			Pid  int      `json:"pid"`
-			Argv []string `json:"argv"`
-			Cwd  string   `json:"cwd"`
-		}{Name: sh}
-		if got, _, err := Check(&fakeHC{term: term}, "t1", 5); err != nil || got != Gone {
+		term.Foreground = fg(sh)
+		if got, _, err := Check(&fakeHC{term: term}, "t1", 5, now); err != nil || got != Gone {
 			t.Errorf("%s: got %v %v", sh, got, err)
 		}
 	}
@@ -126,7 +140,47 @@ func TestCheckShellForegroundIsGone(t *testing.T) {
 
 func TestCheckNoStatusIsBusy(t *testing.T) {
 	term := hc.Terminal{State: "live", CreatedMs: 5}
-	if got, _, err := Check(&fakeHC{term: term}, "t1", 5); err != nil || got != Busy {
+	if got, _, err := Check(&fakeHC{term: term}, "t1", 5, now); err != nil || got != Busy {
+		t.Errorf("got %v %v", got, err)
+	}
+}
+
+func fg(name string) *struct {
+	Name string   `json:"name"`
+	Pid  int      `json:"pid"`
+	Argv []string `json:"argv"`
+	Cwd  string   `json:"cwd"`
+} {
+	return &struct {
+		Name string   `json:"name"`
+		Pid  int      `json:"pid"`
+		Argv []string `json:"argv"`
+		Cwd  string   `json:"cwd"`
+	}{Name: name}
+}
+
+// Claude reports no status, so it counts as Live once its terminal has settled.
+func TestCheckNoStatusClaudeSettles(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		age  time.Duration
+		want Liveness
+	}{
+		{"claude", 10 * time.Second, Busy},
+		{"claude", 30 * time.Second, Live},
+		{"node", 5 * time.Minute, Live},
+		{"pi", 5 * time.Minute, Busy},
+	} {
+		created := now.Add(-tc.age).UnixMilli()
+		term := hc.Terminal{State: "live", CreatedMs: created, Foreground: fg(tc.name)}
+		if got, _, err := Check(&fakeHC{term: term}, "t1", created, now); err != nil || got != tc.want {
+			t.Errorf("%s age %s: got %v %v, want %v", tc.name, tc.age, got, err, tc.want)
+		}
+	}
+}
+
+func TestCheckBlockedIsBusy(t *testing.T) {
+	if got, _, err := Check(&fakeHC{term: live("blocked")}, "t1", 5, now); err != nil || got != Busy {
 		t.Errorf("got %v %v", got, err)
 	}
 }

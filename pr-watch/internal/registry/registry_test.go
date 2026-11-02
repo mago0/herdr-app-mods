@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -127,5 +128,18 @@ func TestUpdateAtomicOnError(t *testing.T) {
 	after, _ := os.ReadFile(p)
 	if string(before) != string(after) {
 		t.Fatal("file changed on error")
+	}
+}
+
+func TestLoadRejectsNewerVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	if err := os.WriteFile(path, []byte(`{"Version":2,"Entries":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "version 2") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := Update(path, func(*Registry) error { return nil }); err == nil {
+		t.Fatal("Update rewrote a newer registry")
 	}
 }

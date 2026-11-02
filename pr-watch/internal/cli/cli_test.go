@@ -39,17 +39,16 @@ type fakeGH struct {
 	calls int
 }
 
-func (f *fakeGH) Fetch(_ context.Context, refs []prurl.Ref) (map[string]github.PR, error) {
+func (f *fakeGH) Fetch(_ context.Context, refs []prurl.Ref) (github.Batch, error) {
 	f.calls++
-	out := map[string]github.PR{}
+	out := github.Batch{PRs: map[string]github.PR{}, Viewer: "mago0"}
 	for _, r := range refs {
 		if p, ok := f.prs[r.URL()]; ok {
-			out[r.URL()] = p
+			out.PRs[r.URL()] = p
 		}
 	}
 	return out, nil
 }
-func (*fakeGH) Viewer(context.Context) (string, error) { return "mago0", nil }
 
 // claudeTerm is a Claude terminal whose session comes from the launch-recipe label.
 func claudeTerm(addr, session string) hc.Terminal {
@@ -121,6 +120,25 @@ func TestLinkPrimesNoWake(t *testing.T) {
 	}
 	if e.Owner.Address != "t7" || e.Owner.SessionID != "S7" || e.Repo != "flocasts/iam" || e.Number != 412 {
 		t.Errorf("owner/repo/number = %+v %q %d", e.Owner, e.Repo, e.Number)
+	}
+}
+
+func TestLinkWatchOnMergedPRNotWatched(t *testing.T) {
+	gh := reviewedPR()
+	pr := gh.prs[prURL]
+	pr.State = "MERGED"
+	gh.prs[prURL] = pr
+	d := deps(t, "t7", fakeHC{"t7": claudeTerm("t7", "S7")}, gh)
+	code, out, errs := run(d, "link", prURL, "--watch")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errs)
+	}
+	if !strings.Contains(out, "not watching: the PR is merged") {
+		t.Errorf("stdout = %q", out)
+	}
+	r, _ := registry.Load(d.StatePath)
+	if e := r.Find(prURL); e == nil || e.Watched {
+		t.Errorf("entry = %+v", e)
 	}
 }
 
@@ -258,8 +276,8 @@ func TestLsAllWithoutAgent(t *testing.T) {
 
 type failingGH struct{ fakeGH }
 
-func (*failingGH) Fetch(context.Context, []prurl.Ref) (map[string]github.PR, error) {
-	return nil, errors.New("gh down")
+func (*failingGH) Fetch(context.Context, []prurl.Ref) (github.Batch, error) {
+	return github.Batch{}, errors.New("gh down")
 }
 
 func TestPollEmptyRegistry(t *testing.T) {

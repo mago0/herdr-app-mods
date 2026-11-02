@@ -3,6 +3,7 @@ package owner
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func envOf(m map[string]string) func(string) string {
 }
 
 func term(addr string, created int64, fgName string, fgPid int, parent string, labels map[string]string) hc.Terminal {
-	t := hc.Terminal{Address: addr, CreatedMs: created, State: "live", Labels: labels}
+	t := hc.Terminal{Address: addr, CreatedMs: created, State: "live", Labels: labels, Cwd: "/home/u"}
 	if parent != "" {
 		t.Parent = &parent
 	}
@@ -38,7 +39,7 @@ func term(addr string, created int64, fgName string, fgPid int, parent string, l
 		Pid  int      `json:"pid"`
 		Argv []string `json:"argv"`
 		Cwd  string   `json:"cwd"`
-	}{Name: fgName, Pid: fgPid}
+	}{Name: fgName, Pid: fgPid, Cwd: "/agent/dir"}
 	return t
 }
 
@@ -67,14 +68,13 @@ func TestResolvePiTopLevel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wd, _ := os.Getwd()
 	if o.Kind != "pi" || o.SessionID != "s1" || o.SessionFile != "/f.jsonl" {
 		t.Errorf("kind/session/file = %q/%q/%q", o.Kind, o.SessionID, o.SessionFile)
 	}
 	if o.Address != "t1" || o.CreatedMs != 111 || o.Parent != "t0" || o.ParentCreatedMs != 100 {
 		t.Errorf("address/created/parent/parentCreated = %q/%d/%q/%d", o.Address, o.CreatedMs, o.Parent, o.ParentCreatedMs)
 	}
-	if o.Cwd != wd || o.Space != "sp1" || o.Tab != "tb1" {
+	if o.Cwd != "/agent/dir" || o.Space != "sp1" || o.Tab != "tb1" {
 		t.Errorf("cwd/space/tab = %q/%q/%q", o.Cwd, o.Space, o.Tab)
 	}
 }
@@ -160,5 +160,78 @@ func TestResolveNoSession(t *testing.T) {
 	_, err := Resolve(envOf(map[string]string{"HC_TERMINAL_ID": "t7"}), c, t.TempDir(), procTree)
 	if err == nil || !strings.Contains(err.Error(), "no session id") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// fakeToplevel makes every directory part of the git worktree root.
+func fakeToplevel(t *testing.T, root string) {
+	t.Helper()
+	old := gitToplevel
+	gitToplevel = func(string) string { return root }
+	t.Cleanup(func() { gitToplevel = old })
+}
+
+func TestResolveCwdAndWorktree(t *testing.T) {
+	env := envOf(map[string]string{"HC_TERMINAL_ID": "t7"})
+	label := map[string]string{"herdr-pr.session": "uuid-1"}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeToplevel(t, "/repo/_worktrees/x")
+	c := fakeHC{"t7": term("t7", 777, "claude", 70, "", label)}
+	o, err := Resolve(env, c, t.TempDir(), procTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Cwd != "/agent/dir" || o.Worktree != "/repo/_worktrees/x" {
+		t.Errorf("cwd/worktree = %q/%q", o.Cwd, o.Worktree)
+	}
+
+	// No foreground cwd: the terminal's cwd. Not in a git worktree: no Worktree.
+	fakeToplevel(t, "")
+	tm := term("t7", 777, "claude", 70, "", label)
+	tm.Foreground.Cwd = ""
+	o, err = Resolve(env, fakeHC{"t7": tm}, t.TempDir(), procTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Cwd != "/home/u" || o.Worktree != "" {
+		t.Errorf("cwd/worktree = %q/%q", o.Cwd, o.Worktree)
+	}
+
+	// Called from home (the mod's Link action): no Worktree, even if home is a git repo.
+	fakeToplevel(t, wd)
+	t.Setenv("HOME", wd)
+	o, err = Resolve(env, c, t.TempDir(), procTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Worktree != "" {
+		t.Errorf("worktree = %q", o.Worktree)
+	}
+}
+
+func TestGitToplevel(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitToplevel(dir); got != "" {
+		t.Errorf("outside git: %q", got)
+	}
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	sub := filepath.Join(dir, "a")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitToplevel(sub); got != dir {
+		t.Errorf("toplevel = %q, want %q", got, dir)
 	}
 }

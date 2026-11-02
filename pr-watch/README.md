@@ -25,7 +25,7 @@ Run this right after opening a PR:
 herdr-pr link <url> --watch
 ```
 
-It records the calling agent as the owner (it must run inside a Herdr terminal) and starts the watch. The PR's current state is the baseline, so only later changes wake the owner.
+It records the calling agent as the owner (it must run inside a Herdr terminal) and starts the watch. The PR's current state is the baseline, so only later changes wake the owner. A PR that is already merged or closed is linked without a watch.
 
 ## Commands
 
@@ -48,15 +48,24 @@ A message starting `[herdr-pr]` is sent to the owner's terminal for:
 
 - a review that requests changes
 - a new comment or review-thread comment from a human other than the `gh` viewer
-- CI failing on a new head commit
+- CI failing (or erroring) on a new head commit
 - a new merge conflict
-- the PR merging or closing (the watch then ends)
 
-Not woken: comments by the `gh` viewer login or by bots, approvals, passing CI, draft changes, anything already seen at link time. A busy owner (status `working`, or none yet) is skipped and told on a later pass. The owner's parent gets an FYI when it is live.
+Not woken: comments by the `gh` viewer login or by bots, approvals and dismissed reviews (even with a body; inline comments on an approval still wake), passing CI, draft changes, anything already seen at link time.
+
+A busy owner is skipped and told on a later pass. Busy means status `working` or `blocked`, or no status yet for pi. Claude Code reports no status, so a Claude owner counts as ready once its terminal is 30 seconds old; a message sent while it works waits in its input. The owner's parent gets an FYI when it is ready.
+
+## Merge or close
+
+The watch ends on the pass that sees the PR merged or closed, with one message per recipient:
+
+- A ready owner gets `[herdr-pr] <repo>#<n> was merged. Watch ended.` (or `closed`), followed by any other events of that pass. The watch ends once this send succeeds.
+- A ready parent gets `[herdr-pr] FYI, no action needed: <repo>#<n> (child <terminal>) was merged. Watch ended.`
+- An owner that is busy or gone is not revived or waited for: the parent is told if it is ready, and the watch ends anyway.
 
 ## Revival
 
-If the owner terminal is gone, `poll` starts the session again in a new background terminal in the same directory (`claude --resume <session>` or `pi --session <file>`), and delivers on the next pass. If the revived session exits at startup, or cannot start, revival stops, the parent is told once, and the watch stays on. After fixing the cause, re-arm with:
+If the owner terminal is gone, `poll` starts the session again in a new background terminal in the agent's folder (`claude --resume <session>` or `pi --session <file>`), and delivers on the next pass. One session that owns several PRs is started once; all its PRs then go to that terminal. A pi child running inside its parent's pi has no terminal of its own; it is revived only after its session file has been unchanged for 10 minutes. If the revived session exits at startup, or cannot start, revival stops, the parent is told once, and the watch stays on. After fixing the cause, re-arm with:
 
 ```sh
 herdr-pr watch <url>
@@ -64,7 +73,7 @@ herdr-pr watch <url>
 
 ## Nothing is deleted
 
-`herdr-pr` never removes a PR, worktree, terminal or branch. When the last open PR of a worktree ends, the owner is told that the worktree can go; removing it is up to the agent.
+`herdr-pr` never removes a PR, worktree, terminal or branch. `link` records the git worktree it runs in. When the last open PR from that worktree ends, the final message to the parent (or to the owner, if there is no ready parent) adds `FYI: worktree <path> has no open PRs left and can be removed.` Only a linked git worktree under a `_worktrees/` folder qualifies; a main checkout or home never does. Removing it is up to the agent.
 
 ## Test
 

@@ -2,6 +2,7 @@
 package app
 
 import (
+	"io/fs"
 	"time"
 
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/github"
@@ -16,4 +17,6 @@ type Deps struct {
 	StatePath      string // registry file
 	ClaudeSessions string // directory of Claude Code's <pid>.json session files
 	Now            func() time.Time
+	LinkedWorktree func(path string) bool                 // a linked git worktree, not a main checkout; nil means ask git
+	Stat           func(path string) (fs.FileInfo, error) // nil means os.Stat
 }

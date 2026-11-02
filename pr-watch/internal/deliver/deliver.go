@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/events"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/hc"
@@ -41,12 +42,34 @@ func ParentFYI(e registry.Entry, ownerAddr string, evs []events.Event) string {
 	return fmt.Sprintf("[herdr-pr] FYI, no action needed: child %s is handling %s (%s).", ownerAddr, ref(e), strings.Join(parts, ", "))
 }
 
-func FinalNote(e registry.Entry, state string) string {
-	return fmt.Sprintf("[herdr-pr] %s was %s. Watch ended.", ref(e), state)
+// FinalOwnerMessage ends the watch for the owner: the state line, then any other events of the
+// same pass, then the worktree line when the owner is the one told about it.
+func FinalOwnerMessage(e registry.Entry, state string, others []events.Event, worktree string) string {
+	lines := []string{fmt.Sprintf("[herdr-pr] %s was %s. Watch ended.", ref(e), state)}
+	for _, ev := range others {
+		lines = append(lines, "- "+ev.Text)
+	}
+	if worktree != "" {
+		lines = append(lines, worktreeLine(worktree))
+	}
+	return strings.Join(lines, "\n")
 }
 
-func WorktreeNote(cwd string) string {
-	return fmt.Sprintf("[herdr-pr] FYI: worktree %s has no open PRs left and can be removed.", cwd)
+// FinalParentMessage tells the parent the watch ended; ownerAddr is empty for an in-process child.
+func FinalParentMessage(e registry.Entry, state, ownerAddr, worktree string) string {
+	child := ownerAddr
+	if child == "" {
+		child = "background child"
+	}
+	msg := fmt.Sprintf("[herdr-pr] FYI, no action needed: %s (child %s) was %s. Watch ended.", ref(e), child, state)
+	if worktree != "" {
+		msg += "\n" + worktreeLine(worktree)
+	}
+	return msg
+}
+
+func worktreeLine(path string) string {
+	return fmt.Sprintf("FYI: worktree %s has no open PRs left and can be removed.", path)
 }
 
 type Liveness int
@@ -60,9 +83,14 @@ const (
 // A shell in the foreground means the agent exited back to its prompt.
 var shells = map[string]bool{"zsh": true, "bash": true, "sh": true, "fish": true, "dash": true}
 
-// Check classifies the owner terminal. A reused address (CreatedMs differs) is
-// Gone. A live terminal with no status yet is Busy so a starting agent is not revived twice.
-func Check(c hc.Client, addr string, createdMs int64) (Liveness, hc.Terminal, error) {
+// settle is how long a terminal whose agent reports no status (Claude Code) must exist before it takes messages.
+const settle = 30 * time.Second
+
+// Check classifies the owner terminal. A reused address (CreatedMs differs) is Gone.
+// A live terminal with no status is Busy so a starting agent is not revived twice, except
+// a non-pi agent that has settled: Claude Code never reports status and queues typed input.
+// blocked is Busy because hc send refuses a blocked program.
+func Check(c hc.Client, addr string, createdMs int64, now time.Time) (Liveness, hc.Terminal, error) {
 	t, err := c.Get(addr)
 	if errors.Is(err, hc.ErrNotFound) {
 		return Gone, hc.Terminal{}, nil
@@ -75,7 +103,12 @@ func Check(c hc.Client, addr string, createdMs int64) (Liveness, hc.Terminal, er
 		return Gone, t, nil
 	case t.Foreground != nil && shells[t.Foreground.Name]:
 		return Gone, t, nil
-	case t.Status == nil, t.Status.State == "working":
+	case t.Status == nil:
+		if t.Foreground != nil && t.Foreground.Name != "pi" && now.Sub(time.UnixMilli(t.CreatedMs)) >= settle {
+			return Live, t, nil
+		}
+		return Busy, t, nil
+	case t.Status.State == "working", t.Status.State == "blocked":
 		return Busy, t, nil
 	}
 	return Live, t, nil

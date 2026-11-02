@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -24,11 +26,12 @@ type sent struct{ To, Text string }
 
 // fakeHC holds terminals by address and records sends and runs.
 type fakeHC struct {
-	terms  map[string]hc.Terminal
-	getErr map[string]error
-	sends  []sent
-	runs   []hc.RunSpec
-	runAs  hc.Terminal
+	terms   map[string]hc.Terminal
+	getErr  map[string]error
+	sendErr map[string]error
+	sends   []sent
+	runs    []hc.RunSpec
+	runAs   hc.Terminal
 }
 
 func (f *fakeHC) Get(addr string) (hc.Terminal, error) {
@@ -43,6 +46,9 @@ func (f *fakeHC) Get(addr string) (hc.Terminal, error) {
 }
 
 func (f *fakeHC) Send(addr, text string) error {
+	if err := f.sendErr[addr]; err != nil {
+		return err
+	}
 	f.sends = append(f.sends, sent{addr, text})
 	return nil
 }
@@ -68,23 +74,21 @@ type fakeGH struct {
 	after func() // runs inside Fetch, between load and save
 }
 
-func (f *fakeGH) Fetch(_ context.Context, refs []prurl.Ref) (map[string]github.PR, error) {
+func (f *fakeGH) Fetch(_ context.Context, refs []prurl.Ref) (github.Batch, error) {
 	if f.after != nil {
 		f.after()
 	}
 	if f.err != nil {
-		return nil, f.err
+		return github.Batch{}, f.err
 	}
-	out := map[string]github.PR{}
+	out := github.Batch{PRs: map[string]github.PR{}, Viewer: "mago0"}
 	for _, r := range refs {
 		if p, ok := f.prs[r.URL()]; ok {
-			out[r.URL()] = p
+			out.PRs[r.URL()] = p
 		}
 	}
 	return out, nil
 }
-
-func (*fakeGH) Viewer(context.Context) (string, error) { return "mago0", nil }
 
 type status = struct {
 	App   string `json:"app"`
@@ -117,6 +121,9 @@ func setup(t *testing.T, entries ...registry.Entry) (app.Deps, *fakeHC, *fakeGH)
 		GH:        gh,
 		StatePath: path,
 		Now:       func() time.Time { return time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC) },
+		// Worktree paths in these tests are made up; treat every one as a linked worktree.
+		LinkedWorktree: func(string) bool { return true },
+		Stat:           func(string) (fs.FileInfo, error) { return nil, fs.ErrNotExist },
 	}
 	return d, c, gh
 }
@@ -126,7 +133,7 @@ func watched(t *testing.T) registry.Entry {
 		URL: prURL, Repo: "flocasts/iam", Number: 412, Watched: true,
 		Owner: registry.Owner{
 			Address: "t2", CreatedMs: 12, Kind: "claude", SessionID: "sid",
-			Cwd: t.TempDir(), Parent: "t1", ParentCreatedMs: 11,
+			Cwd: t.TempDir(), Worktree: "/repo/_worktrees/iam", Parent: "t1", ParentCreatedMs: 11,
 		},
 		Display: registry.Display{State: "OPEN"},
 		Last:    registry.Last{State: "OPEN", SeenIDs: []string{"c1"}},
@@ -375,23 +382,21 @@ func TestPollUnwatchedUpdatesDisplayOnly(t *testing.T) {
 	}
 }
 
+const (
+	finalParent  = "[herdr-pr] FYI, no action needed: flocasts/iam#412 (child t2) was merged. Watch ended."
+	worktreeLine = "FYI: worktree /repo/_worktrees/iam has no open PRs left and can be removed."
+)
+
 func TestPollMergedEndsWatchAndNotesWorktree(t *testing.T) {
-	e := watched(t)
-	d, c, gh := setup(t, e)
-	p := openPR(oldComment)
-	p.State = "MERGED"
-	gh.prs[prURL] = p
+	d, c, gh := setup(t, watched(t))
+	gh.prs[prURL] = merged(oldComment)
 	run(t, d)
 
-	final := "[herdr-pr] flocasts/iam#412 was merged. Watch ended."
-	note := "[herdr-pr] FYI: worktree " + e.Owner.Cwd + " has no open PRs left and can be removed."
-	owner := c.to("t2")
-	if len(owner) != 2 || owner[1] != final {
-		t.Errorf("owner got %q", owner)
+	if got := c.to("t2"); !slices.Equal(got, []string{finalMerged}) {
+		t.Errorf("owner got %q", got)
 	}
-	parent := c.to("t1")
-	if len(parent) != 3 || parent[1] != final || parent[2] != note {
-		t.Errorf("parent got %q", parent)
+	if got := c.to("t1"); !slices.Equal(got, []string{finalParent + "\n" + worktreeLine}) {
+		t.Errorf("parent got %q", got)
 	}
 	got := load(t, d)
 	if got.Watched || !got.Last.WorktreeNoted || got.Display.State != "MERGED" {
@@ -402,6 +407,19 @@ func TestPollMergedEndsWatchAndNotesWorktree(t *testing.T) {
 	run(t, d)
 	if len(c.sends) != n {
 		t.Errorf("second pass sent %v", c.sends[n:])
+	}
+}
+
+func TestPollMergedOneMessageWithOtherEvents(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	gh.prs[prURL] = merged(oldComment, review)
+	run(t, d)
+	want := finalMerged + "\n- review from alice: changes requested"
+	if got := c.to("t2"); !slices.Equal(got, []string{want}) {
+		t.Errorf("owner got %q", got)
+	}
+	if got := c.to("t1"); len(got) != 1 {
+		t.Errorf("parent got %q", got)
 	}
 }
 
@@ -418,11 +436,11 @@ func TestPollWorktreeNoteWaitsForLastOpenPR(t *testing.T) {
 	gh.prs[other.URL] = p413
 	run(t, d)
 	for _, s := range c.sends {
-		if bytes.Contains([]byte(s.Text), []byte("worktree")) {
+		if strings.Contains(s.Text, "worktree") {
 			t.Errorf("worktree note with an open PR left: %q", s.Text)
 		}
 	}
-	if got := c.to("t2"); len(got) != 2 || got[1] != "[herdr-pr] flocasts/iam#412 was closed. Watch ended." {
+	if got := c.to("t2"); !slices.Equal(got, []string{"[herdr-pr] flocasts/iam#412 was closed. Watch ended."}) {
 		t.Errorf("owner got %q", got)
 	}
 }
@@ -431,13 +449,65 @@ func TestPollWorktreeNoteToOwnerWithoutParent(t *testing.T) {
 	e := watched(t)
 	e.Owner.Parent, e.Owner.ParentCreatedMs = "", 0
 	d, c, gh := setup(t, e)
-	p := openPR(oldComment)
-	p.State = "MERGED"
-	gh.prs[prURL] = p
+	gh.prs[prURL] = merged(oldComment)
 	run(t, d)
-	owner := c.to("t2")
-	if len(owner) != 3 || !bytes.Contains([]byte(owner[2]), []byte("worktree")) {
-		t.Errorf("owner got %q", owner)
+	if got := c.to("t2"); !slices.Equal(got, []string{finalMerged + "\n" + worktreeLine}) {
+		t.Errorf("owner got %q", got)
+	}
+}
+
+// A main checkout, home, or a folder outside _worktrees/ is never offered for removal.
+func TestPollNoWorktreeNoteOutsideLinkedWorktree(t *testing.T) {
+	for name, tc := range map[string]struct {
+		worktree string
+		linked   bool
+	}{
+		"not a linked worktree": {"/repo/_worktrees/iam", false},
+		"not under _worktrees":  {"/home/mattw/Projects/flosports", true},
+		"home or no git":        {"", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := watched(t)
+			e.Owner.Worktree = tc.worktree
+			d, c, gh := setup(t, e)
+			d.LinkedWorktree = func(string) bool { return tc.linked }
+			gh.prs[prURL] = merged(oldComment)
+			run(t, d)
+			for _, s := range c.sends {
+				if strings.Contains(s.Text, "worktree") {
+					t.Errorf("worktree note sent: %q", s.Text)
+				}
+			}
+			if got := load(t, d); got.Watched || got.Last.WorktreeNoted {
+				t.Errorf("entry = %+v", got)
+			}
+		})
+	}
+}
+
+func TestLinkedWorktreeGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	main, wt := filepath.Join(dir, "repo"), filepath.Join(dir, "repo", "_worktrees", "x")
+	for _, args := range [][]string{
+		{"init", "-q", main},
+		{"-C", main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", main, "worktree", "add", "-q", "--detach", wt},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if linkedWorktree(main) {
+		t.Error("main checkout counted as linked worktree")
+	}
+	if !linkedWorktree(wt) {
+		t.Error("linked worktree not detected")
+	}
+	if linkedWorktree(filepath.Join(dir, "missing")) {
+		t.Error("missing folder counted as linked worktree")
 	}
 }
 
@@ -504,41 +574,78 @@ func clock(d *app.Deps) *time.Time {
 
 const finalMerged = "[herdr-pr] flocasts/iam#412 was merged. Watch ended."
 
-func TestPollBusyAtMergeDeliversNextPass(t *testing.T) {
+// A merge never revives or waits: an owner that is not Live is skipped, the parent is told, and the watch ends.
+func TestPollBusyAtMergeTellsParentAndEnds(t *testing.T) {
 	d, c, gh := setup(t, watched(t))
 	c.terms["t2"] = term("t2", 12, "working")
 	gh.prs[prURL] = merged(oldComment)
 	run(t, d)
-	if len(c.sends) != 0 || !load(t, d).Watched {
-		t.Fatalf("sends %v watched %v", c.sends, load(t, d).Watched)
+	if got := c.to("t2"); len(got) != 0 {
+		t.Errorf("busy owner got %q", got)
 	}
-
-	c.terms["t2"] = term("t2", 12, "idle")
-	run(t, d)
-	owner := c.to("t2")
-	if len(owner) != 2 || !strings.Contains(owner[0], "PR was merged") || owner[1] != finalMerged {
-		t.Errorf("owner got %q", owner)
+	if got := c.to("t1"); !slices.Equal(got, []string{finalParent + "\n" + worktreeLine}) {
+		t.Errorf("parent got %q", got)
 	}
 	if load(t, d).Watched {
 		t.Error("watch not ended")
 	}
 }
 
-func TestPollReviveAtMergeDeliversAfterRevive(t *testing.T) {
-	d, c, gh := setup(t, watched(t))
-	delete(c.terms, "t2")
-	c.runAs = hc.Terminal{Address: "t9", CreatedMs: 99}
+func TestPollGoneAtMergeNotRevived(t *testing.T) {
+	for name, mod := range map[string]func(*registry.Entry){
+		"gone":          func(*registry.Entry) {},
+		"revive failed": func(e *registry.Entry) { e.ReviveFailed, e.ReviveFailedTold = "cwd missing: /w", true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := watched(t)
+			mod(&e)
+			d, c, gh := setup(t, e)
+			delete(c.terms, "t2")
+			gh.prs[prURL] = merged(oldComment, review)
+			run(t, d)
+			if len(c.runs) != 0 {
+				t.Errorf("revived for a merge: %+v", c.runs)
+			}
+			if got := c.to("t1"); !slices.Equal(got, []string{finalParent + "\n" + worktreeLine}) {
+				t.Errorf("parent got %q", got)
+			}
+			if got := load(t, d); got.Watched || !got.Last.WorktreeNoted {
+				t.Errorf("entry = %+v", got)
+			}
+		})
+	}
+}
+
+func TestPollInProcessChildMergedTellsParent(t *testing.T) {
+	e := watched(t)
+	e.Owner.Address, e.Owner.CreatedMs, e.Owner.Kind = "", 0, "pi"
+	d, c, gh := setup(t, e)
 	gh.prs[prURL] = merged(oldComment)
 	run(t, d)
-	if len(c.runs) != 1 || len(c.sends) != 0 || !load(t, d).Watched {
-		t.Fatalf("runs %v sends %v", c.runs, c.sends)
+	want := "[herdr-pr] FYI, no action needed: flocasts/iam#412 (child background child) was merged. Watch ended.\n" + worktreeLine
+	if got := c.to("t1"); !slices.Equal(got, []string{want}) || len(c.runs) != 0 {
+		t.Errorf("parent got %q, runs %v", got, c.runs)
+	}
+}
+
+func TestPollMergeSendFailureKeepsWatch(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	c.sendErr = map[string]error{"t2": errors.New("hc send failed")}
+	gh.prs[prURL] = merged(oldComment)
+	if err := Run(context.Background(), d); err == nil {
+		t.Fatal("want send error")
+	}
+	if got := c.to("t1"); len(got) != 0 {
+		t.Errorf("parent got %q before the owner was told", got)
+	}
+	if got := load(t, d); !got.Watched || got.Last.State != "OPEN" {
+		t.Errorf("entry = %+v", got)
 	}
 
-	c.terms["t9"] = term("t9", 99, "idle")
+	c.sendErr = nil
 	run(t, d)
-	owner := c.to("t9")
-	if len(owner) != 2 || owner[1] != finalMerged {
-		t.Errorf("revived owner got %q", owner)
+	if got := c.to("t2"); !slices.Equal(got, []string{finalMerged}) {
+		t.Errorf("owner got %q", got)
 	}
 	if load(t, d).Watched {
 		t.Error("watch not ended")
@@ -651,5 +758,134 @@ func TestPollRevivedClosedAfterDeliveryIsRevivedAgain(t *testing.T) {
 	}
 	if got := load(t, d); got.RevivedAs != "t10" || got.ReviveFailed != "" {
 		t.Errorf("entry = %+v", got)
+	}
+}
+
+// claudeTerm is an interactive Claude terminal: no status, created at created ms.
+func claudeTerm(addr string, created int64) hc.Terminal {
+	return hc.Terminal{Address: addr, CreatedMs: created, State: "live", Foreground: &struct {
+		Name string   `json:"name"`
+		Pid  int      `json:"pid"`
+		Argv []string `json:"argv"`
+		Cwd  string   `json:"cwd"`
+	}{Name: "claude"}}
+}
+
+func TestPollClaudeOwnerWithoutStatusWoken(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	c.terms["t2"] = claudeTerm("t2", 12) // created in 1970: long settled
+	gh.prs[prURL] = openPR(oldComment, review)
+	run(t, d)
+	if got := c.to("t2"); !slices.Equal(got, []string{ownerMsg}) {
+		t.Errorf("claude owner got %q", got)
+	}
+}
+
+func second(t *testing.T) registry.Entry {
+	e := watched(t)
+	e.URL, e.Repo, e.Number = "https://github.com/flocasts/infra/pull/99", "flocasts/infra", 99
+	return e
+}
+
+func prAt(url string, items ...github.Item) github.PR {
+	p := openPR(items...)
+	p.URL = url
+	return p
+}
+
+// One session that owns two PRs is started once, and both PRs are delivered to that terminal.
+func TestPollOneSessionRevivedOnce(t *testing.T) {
+	other := second(t)
+	d, c, gh := setup(t, watched(t), other)
+	now := clock(&d)
+	delete(c.terms, "t2")
+	c.runAs = hc.Terminal{Address: "t9", CreatedMs: 99}
+	gh.prs[prURL] = openPR(oldComment, review)
+	gh.prs[other.URL] = prAt(other.URL, oldComment, review)
+	run(t, d)
+	if len(c.runs) != 1 || len(c.sends) != 0 {
+		t.Fatalf("runs %+v sends %v", c.runs, c.sends)
+	}
+	r, _ := registry.Load(d.StatePath)
+	for _, e := range r.Entries {
+		if e.RevivedAs != "t9" || e.RevivedCreatedMs != 99 || e.RevivedAtMs != now.UnixMilli() {
+			t.Errorf("%s: revive fields %q/%d/%d", e.URL, e.RevivedAs, e.RevivedCreatedMs, e.RevivedAtMs)
+		}
+	}
+
+	*now = now.Add(2 * time.Minute)
+	c.terms["t9"] = term("t9", 99, "idle")
+	run(t, d)
+	if len(c.runs) != 1 {
+		t.Errorf("hc run %d times", len(c.runs))
+	}
+	got := c.to("t9")
+	if len(got) != 2 || !strings.Contains(got[0], "flocasts/iam#412") || !strings.Contains(got[1], "flocasts/infra#99") {
+		t.Errorf("revived owner got %q", got)
+	}
+	r, _ = registry.Load(d.StatePath)
+	for _, e := range r.Entries {
+		if e.RevivedAtMs != 0 {
+			t.Errorf("%s: startup window still open", e.URL)
+		}
+	}
+}
+
+// A PR with no events while its session was revived for another PR still finds that terminal later.
+func TestPollAdoptsTerminalRevivedForAnotherPR(t *testing.T) {
+	e := watched(t)
+	e.RevivedAs, e.RevivedCreatedMs = "t9", 99
+	other := second(t)
+	d, c, gh := setup(t, e, other)
+	delete(c.terms, "t2")
+	c.terms["t9"] = term("t9", 99, "idle")
+	gh.prs[prURL] = openPR(oldComment)
+	gh.prs[other.URL] = prAt(other.URL, oldComment, review)
+	run(t, d)
+	if len(c.runs) != 0 {
+		t.Errorf("revived again: %+v", c.runs)
+	}
+	if got := c.to("t9"); len(got) != 1 || !strings.Contains(got[0], "flocasts/infra#99") {
+		t.Errorf("t9 got %q", got)
+	}
+	r, _ := registry.Load(d.StatePath)
+	if got := r.Find(other.URL); got.RevivedAs != "t9" {
+		t.Errorf("entry = %+v", got)
+	}
+}
+
+type modTime time.Time
+
+func (m modTime) Name() string       { return "s.jsonl" }
+func (m modTime) Size() int64        { return 0 }
+func (m modTime) Mode() fs.FileMode  { return 0 }
+func (m modTime) ModTime() time.Time { return time.Time(m) }
+func (m modTime) IsDir() bool        { return false }
+func (m modTime) Sys() any           { return nil }
+
+// An in-process child whose session file changed recently may still run inside its parent.
+func TestPollInProcessChildRecentlyActiveNotRevived(t *testing.T) {
+	e := watched(t)
+	e.Owner.Address, e.Owner.CreatedMs, e.Owner.Kind, e.Owner.SessionFile = "", 0, "pi", "/s/child.jsonl"
+	d, c, gh := setup(t, e)
+	now := clock(&d)
+	c.runAs = hc.Terminal{Address: "t9", CreatedMs: 99}
+	written := now.Add(-2 * time.Minute)
+	d.Stat = func(path string) (fs.FileInfo, error) {
+		if path != "/s/child.jsonl" {
+			return nil, fs.ErrNotExist
+		}
+		return modTime(written), nil
+	}
+	gh.prs[prURL] = openPR(oldComment, review)
+	run(t, d)
+	if len(c.runs) != 0 || len(c.sends) != 0 {
+		t.Fatalf("runs %+v sends %v", c.runs, c.sends)
+	}
+
+	*now = now.Add(9 * time.Minute) // 11 minutes since the last write
+	run(t, d)
+	if len(c.runs) != 1 || load(t, d).RevivedAs != "t9" {
+		t.Errorf("runs %+v", c.runs)
 	}
 }
