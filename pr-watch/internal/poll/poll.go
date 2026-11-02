@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/app"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/deliver"
@@ -23,12 +24,13 @@ func Run(ctx context.Context, d app.Deps) error {
 	if err != nil {
 		return err
 	}
-	p := &pass{hc: d.HC, entries: snap.Entries, ended: map[string]bool{}}
+	p := &pass{hc: d.HC, now: d.Now(), entries: snap.Entries, ended: map[string]bool{}}
 
-	// Unwatched open PRs are fetched too so the display stays current.
+	// Unwatched open PRs are fetched too so the display stays current. A watched PR
+	// stays fetched until its owner has been told it closed, even after Display says so.
 	var refs []prurl.Ref
 	for _, e := range snap.Entries {
-		if !isOpen(e) {
+		if !isOpen(e) && !(e.Watched && (e.Last.State == "" || e.Last.State == "OPEN")) {
 			continue
 		}
 		ref, err := prurl.Parse(e.URL)
@@ -75,7 +77,8 @@ func Run(ctx context.Context, d app.Deps) error {
 				continue
 			}
 			cur.Display, cur.Last = e.Display, e.Last
-			cur.RevivedAs, cur.RevivedCreatedMs, cur.ReviveFailed = e.RevivedAs, e.RevivedCreatedMs, e.ReviveFailed
+			cur.RevivedAs, cur.RevivedCreatedMs, cur.RevivedAtMs = e.RevivedAs, e.RevivedCreatedMs, e.RevivedAtMs
+			cur.ReviveFailed = e.ReviveFailed
 			if p.ended[e.URL] {
 				cur.Watched = false
 			}
@@ -90,6 +93,7 @@ func isOpen(e registry.Entry) bool { return e.Display.State == "" || e.Display.S
 
 type pass struct {
 	hc      hc.Client
+	now     time.Time
 	viewer  string
 	entries []registry.Entry
 	ended   map[string]bool
@@ -152,22 +156,35 @@ func (p *pass) parent(e *registry.Entry) deliver.Liveness {
 	return l
 }
 
+// startupWindow is how soon a revived terminal may disappear before the revive counts as failed.
+const startupWindow = 10 * time.Minute
+
 // revive starts the owner again; delivery waits for the next pass, when the new terminal has settled.
-// A busy parent still exists, so the revived terminal stays under it.
+// A recorded failure stops further revives until `watch` re-arms, so a session that cannot start is not respawned forever.
 func (p *pass) revive(e *registry.Entry) {
+	if e.ReviveFailed != "" {
+		return
+	}
 	pl := p.parent(e)
+	if e.RevivedAs != "" && p.now.Sub(time.UnixMilli(e.RevivedAtMs)) < startupWindow {
+		p.reviveFailed(e, pl, errors.New("revived session exited at startup"))
+		return
+	}
+	// A busy parent still exists, so the revived terminal stays under it.
 	t, err := deliver.Revive(p.hc, *e, pl != deliver.Gone)
-	if err == nil {
-		e.RevivedAs, e.RevivedCreatedMs, e.ReviveFailed = t.Address, t.CreatedMs, ""
+	if err != nil {
+		p.reviveFailed(e, pl, err)
 		return
 	}
+	e.RevivedAs, e.RevivedCreatedMs, e.RevivedAtMs = t.Address, t.CreatedMs, p.now.UnixMilli()
+}
+
+// reviveFailed records err and tells a live parent; a busy or gone parent is not told later.
+func (p *pass) reviveFailed(e *registry.Entry, parent deliver.Liveness, err error) {
+	e.ReviveFailed = err.Error()
 	p.errs = append(p.errs, fmt.Errorf("%s: revive: %w", ref(e), err))
-	if e.ReviveFailed != "" || pl != deliver.Live {
-		return
-	}
-	msg := fmt.Sprintf("[herdr-pr] FYI, no action needed: cannot revive the owner of %s: %v. The watch stays on.", ref(e), err)
-	if p.send(e.Owner.Parent, msg) {
-		e.ReviveFailed = err.Error()
+	if parent == deliver.Live {
+		p.send(e.Owner.Parent, fmt.Sprintf("[herdr-pr] FYI, no action needed: cannot revive the owner of %s: %v. The watch stays on.", ref(e), err))
 	}
 }
 

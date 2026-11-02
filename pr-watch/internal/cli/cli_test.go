@@ -171,6 +171,21 @@ func TestWatchUnwatchUnlink(t *testing.T) {
 	}
 }
 
+func TestWatchClearsReviveFailed(t *testing.T) {
+	d := deps(t, "", nil, nil)
+	registry.Update(d.StatePath, func(r *registry.Registry) error {
+		r.Entries = []registry.Entry{{URL: prURL, Repo: "flocasts/iam", Number: 412, ReviveFailed: "cwd missing: /w", RevivedAtMs: 5}}
+		return nil
+	})
+	if code, _, errs := run(d, "watch", prURL); code != 0 {
+		t.Fatalf("watch exit %d: %s", code, errs)
+	}
+	r, _ := registry.Load(d.StatePath)
+	if e := r.Find(prURL); e.ReviveFailed != "" || e.RevivedAtMs != 0 || !e.Watched {
+		t.Errorf("entry = %+v", e)
+	}
+}
+
 func TestLsWithChildren(t *testing.T) {
 	d := deps(t, "", nil, nil)
 	pr := func(n int, o registry.Owner) registry.Entry {

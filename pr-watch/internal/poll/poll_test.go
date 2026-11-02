@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -297,11 +298,11 @@ func TestPollReviveFailureToldOnce(t *testing.T) {
 	d, c, gh := setup(t, e)
 	delete(c.terms, "t2")
 	gh.prs[prURL] = openPR(oldComment, review)
-	for range 2 {
-		if err := Run(context.Background(), d); err == nil {
-			t.Fatal("want revive error")
-		}
+	if err := Run(context.Background(), d); err == nil {
+		t.Fatal("want revive error")
 	}
+	// A recorded failure stops further revives, so the second pass has nothing to report.
+	run(t, d)
 	want := "[herdr-pr] FYI, no action needed: cannot revive the owner of flocasts/iam#412: cwd missing: /nonexistent/x. The watch stays on."
 	if got := c.to("t1"); !slices.Equal(got, []string{want}) {
 		t.Errorf("parent got %q", got)
@@ -485,5 +486,112 @@ func TestPollConcurrentUnlinkStaysRemoved(t *testing.T) {
 	r, _ := registry.Load(d.StatePath)
 	if len(r.Entries) != 0 {
 		t.Errorf("unlinked entry came back: %+v", r.Entries)
+	}
+}
+
+func merged(items ...github.Item) github.PR {
+	p := openPR(items...)
+	p.State = "MERGED"
+	return p
+}
+
+// clock lets a test move time between passes.
+func clock(d *app.Deps) *time.Time {
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	d.Now = func() time.Time { return now }
+	return &now
+}
+
+const finalMerged = "[herdr-pr] flocasts/iam#412 was merged. Watch ended."
+
+func TestPollBusyAtMergeDeliversNextPass(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	c.terms["t2"] = term("t2", 12, "working")
+	gh.prs[prURL] = merged(oldComment)
+	run(t, d)
+	if len(c.sends) != 0 || !load(t, d).Watched {
+		t.Fatalf("sends %v watched %v", c.sends, load(t, d).Watched)
+	}
+
+	c.terms["t2"] = term("t2", 12, "idle")
+	run(t, d)
+	owner := c.to("t2")
+	if len(owner) != 2 || !strings.Contains(owner[0], "PR was merged") || owner[1] != finalMerged {
+		t.Errorf("owner got %q", owner)
+	}
+	if load(t, d).Watched {
+		t.Error("watch not ended")
+	}
+}
+
+func TestPollReviveAtMergeDeliversAfterRevive(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	delete(c.terms, "t2")
+	c.runAs = hc.Terminal{Address: "t9", CreatedMs: 99}
+	gh.prs[prURL] = merged(oldComment)
+	run(t, d)
+	if len(c.runs) != 1 || len(c.sends) != 0 || !load(t, d).Watched {
+		t.Fatalf("runs %v sends %v", c.runs, c.sends)
+	}
+
+	c.terms["t9"] = term("t9", 99, "idle")
+	run(t, d)
+	owner := c.to("t9")
+	if len(owner) != 2 || owner[1] != finalMerged {
+		t.Errorf("revived owner got %q", owner)
+	}
+	if load(t, d).Watched {
+		t.Error("watch not ended")
+	}
+}
+
+func TestPollRevivedDiesAtStartupNotRevivedAgain(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	now := clock(&d)
+	delete(c.terms, "t2")
+	c.runAs = hc.Terminal{Address: "t9", CreatedMs: 99}
+	gh.prs[prURL] = openPR(oldComment, review)
+	run(t, d)
+	if got := load(t, d); got.RevivedAtMs != now.UnixMilli() {
+		t.Fatalf("RevivedAtMs = %d", got.RevivedAtMs)
+	}
+
+	// t9 never appears: the revived session exited at startup.
+	*now = now.Add(2 * time.Minute)
+	if err := Run(context.Background(), d); err == nil {
+		t.Fatal("want startup exit reported")
+	}
+	*now = now.Add(2 * time.Minute)
+	run(t, d)
+
+	if len(c.runs) != 1 {
+		t.Errorf("hc run %d times", len(c.runs))
+	}
+	want := "[herdr-pr] FYI, no action needed: cannot revive the owner of flocasts/iam#412: revived session exited at startup. The watch stays on."
+	if got := c.to("t1"); !slices.Equal(got, []string{want}) {
+		t.Errorf("parent got %q", got)
+	}
+	got := load(t, d)
+	if got.ReviveFailed == "" || !got.Watched || slices.Contains(got.Last.SeenIDs, "r1") {
+		t.Errorf("entry = %+v", got)
+	}
+}
+
+func TestPollRevivedGoneLaterIsRevivedAgain(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	now := clock(&d)
+	delete(c.terms, "t2")
+	c.runAs = hc.Terminal{Address: "t9", CreatedMs: 99}
+	gh.prs[prURL] = openPR(oldComment, review)
+	run(t, d)
+
+	*now = now.Add(11 * time.Minute)
+	c.runAs = hc.Terminal{Address: "t10", CreatedMs: 100}
+	run(t, d)
+	if len(c.runs) != 2 || len(c.sends) != 0 {
+		t.Errorf("runs %d sends %v", len(c.runs), c.sends)
+	}
+	if got := load(t, d); got.RevivedAs != "t10" || got.ReviveFailed != "" {
+		t.Errorf("entry = %+v", got)
 	}
 }
