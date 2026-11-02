@@ -172,8 +172,9 @@ func stripHeredocs(s string) string {
 	var b strings.Builder
 	for {
 		loc := heredoc.FindStringSubmatchIndex(s)
-		// The closing quote must match the opening one, as T3's backreference requires.
-		for loc != nil && s[loc[2]:loc[3]] != s[loc[6]:loc[7]] {
+		// An opening quote needs the same closing quote, as T3's backreference requires;
+		// with none, anything after the word is just the rest of the line.
+		for loc != nil && loc[3] > loc[2] && s[loc[2]:loc[3]] != s[loc[6]:loc[7]] {
 			next := heredoc.FindStringSubmatchIndex(s[loc[0]+2:])
 			if next == nil {
 				loc = nil

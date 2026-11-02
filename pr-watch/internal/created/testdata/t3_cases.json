@@ -145,5 +145,11 @@
     "linked": [
       9
     ]
+  },
+  {
+    "name": "an unquoted heredoc word followed by quoted text",
+    "input": "cat <<EOF\"x\"\ngh pr create\nEOF\ngh pr view --json url -q .url",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": []
   }
 ]
