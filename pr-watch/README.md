@@ -53,7 +53,7 @@ A message starting `[herdr-pr]` is sent to the owner's terminal for:
 
 Not woken: comments by the `gh` viewer login or by bots, approvals and dismissed reviews (even with a body; inline comments on an approval still wake), passing CI, draft changes, anything already seen at link time.
 
-A busy owner is skipped and told on a later pass. Busy means status `working` or `blocked`, or no status yet for pi. Claude Code reports no status, so a Claude owner counts as ready once its terminal is 30 seconds old; a message sent while it works waits in its input. The owner's parent gets an FYI when it is ready.
+A busy owner is skipped and told on a later pass. Busy means status `working` or `blocked`, or no status yet for pi. Claude Code reports no status, so a Claude owner (foreground `claude`, or `node` running Claude) counts as ready once its terminal is 30 seconds old; a message sent while it works waits in its input. Any other program with no status, such as an editor or pager started after the agent exited, counts as busy, so nothing is typed into it. The owner's parent gets an FYI when it is ready.
 
 ## Merge or close
 

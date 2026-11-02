@@ -159,22 +159,28 @@ func fg(name string) *struct {
 	}{Name: name}
 }
 
-// Claude reports no status, so it counts as Live once its terminal has settled.
+// Claude reports no status, so it counts as Live once its terminal has settled. Any other
+// program with no status (an editor or pager run after the agent exited) stays Busy.
 func TestCheckNoStatusClaudeSettles(t *testing.T) {
 	for _, tc := range []struct {
 		name string
+		argv []string
 		age  time.Duration
 		want Liveness
 	}{
-		{"claude", 10 * time.Second, Busy},
-		{"claude", 30 * time.Second, Live},
-		{"node", 5 * time.Minute, Live},
-		{"pi", 5 * time.Minute, Busy},
+		{"claude", nil, 10 * time.Second, Busy},
+		{"claude", nil, 30 * time.Second, Live},
+		{"node", []string{"node", "/x/claude/cli.js"}, 5 * time.Minute, Live},
+		{"node", []string{"node", "server.js"}, 5 * time.Minute, Busy},
+		{"nvim", []string{"nvim", "main.go"}, 5 * time.Minute, Busy},
+		{"pi", nil, 5 * time.Minute, Busy},
 	} {
 		created := now.Add(-tc.age).UnixMilli()
-		term := hc.Terminal{State: "live", CreatedMs: created, Foreground: fg(tc.name)}
+		f := fg(tc.name)
+		f.Argv = tc.argv
+		term := hc.Terminal{State: "live", CreatedMs: created, Foreground: f}
 		if got, _, err := Check(&fakeHC{term: term}, "t1", created, now); err != nil || got != tc.want {
-			t.Errorf("%s age %s: got %v %v, want %v", tc.name, tc.age, got, err, tc.want)
+			t.Errorf("%s %v age %s: got %v %v, want %v", tc.name, tc.argv, tc.age, got, err, tc.want)
 		}
 	}
 }

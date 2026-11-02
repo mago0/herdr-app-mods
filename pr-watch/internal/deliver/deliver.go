@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -88,8 +89,9 @@ const settle = 30 * time.Second
 
 // Check classifies the owner terminal. A reused address (CreatedMs differs) is Gone.
 // A live terminal with no status is Busy so a starting agent is not revived twice, except
-// a non-pi agent that has settled: Claude Code never reports status and queues typed input.
-// blocked is Busy because hc send refuses a blocked program.
+// a Claude agent that has settled: Claude Code never reports status and queues typed input.
+// Any other program with no status (an editor, pager or build run after the agent exited)
+// stays Busy so a message is never typed into it. blocked is Busy because hc send refuses a blocked program.
 func Check(c hc.Client, addr string, createdMs int64, now time.Time) (Liveness, hc.Terminal, error) {
 	t, err := c.Get(addr)
 	if errors.Is(err, hc.ErrNotFound) {
@@ -104,7 +106,7 @@ func Check(c hc.Client, addr string, createdMs int64, now time.Time) (Liveness, 
 	case t.Foreground != nil && shells[t.Foreground.Name]:
 		return Gone, t, nil
 	case t.Status == nil:
-		if t.Foreground != nil && t.Foreground.Name != "pi" && now.Sub(time.UnixMilli(t.CreatedMs)) >= settle {
+		if isClaude(t) && now.Sub(time.UnixMilli(t.CreatedMs)) >= settle {
 			return Live, t, nil
 		}
 		return Busy, t, nil
@@ -112,6 +114,18 @@ func Check(c hc.Client, addr string, createdMs int64, now time.Time) (Liveness, 
 		return Busy, t, nil
 	}
 	return Live, t, nil
+}
+
+// isClaude reports a Claude Code foreground: the claude binary, or node running Claude's script.
+func isClaude(t hc.Terminal) bool {
+	f := t.Foreground
+	if f == nil {
+		return false
+	}
+	if f.Name == "claude" {
+		return true
+	}
+	return f.Name == "node" && slices.ContainsFunc(f.Argv, func(a string) bool { return strings.Contains(a, "claude") })
 }
 
 // Revive resumes the owner's session in a new background terminal in the same cwd.
