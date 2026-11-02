@@ -13,6 +13,7 @@ import (
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/app"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/events"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/owner"
+	"github.com/mago0/herdr-app-mods/pr-watch/internal/poll"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/prurl"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/registry"
 )
@@ -48,8 +49,11 @@ func Run(args []string, d app.Deps, stdout, stderr io.Writer) int {
 	case "ls":
 		err = c.ls(args[1:])
 	case "poll":
-		fmt.Fprintln(stderr, "[herdr-pr] poll: not implemented")
-		return 2
+		if len(args) > 1 {
+			err = fmt.Errorf("%w: poll takes no arguments", errUsage)
+		} else {
+			err = poll.Run(context.Background(), d)
+		}
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0

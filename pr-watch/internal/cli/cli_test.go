@@ -241,9 +241,28 @@ func TestLsAllWithoutAgent(t *testing.T) {
 	}
 }
 
-func TestPollNotImplemented(t *testing.T) {
-	code, _, errs := run(deps(t, "", nil, nil), "poll")
-	if code != 2 || !strings.Contains(errs, "poll: not implemented") {
+type failingGH struct{ fakeGH }
+
+func (*failingGH) Fetch(context.Context, []prurl.Ref) (map[string]github.PR, error) {
+	return nil, errors.New("gh down")
+}
+
+func TestPollEmptyRegistry(t *testing.T) {
+	code, _, errs := run(deps(t, "", nil, &fakeGH{}), "poll")
+	if code != 0 || errs != "" {
+		t.Fatalf("exit %d, stderr %q", code, errs)
+	}
+}
+
+func TestPollErrorExits1(t *testing.T) {
+	d := deps(t, "", nil, nil)
+	d.GH = &failingGH{}
+	registry.Update(d.StatePath, func(r *registry.Registry) error {
+		r.Entries = []registry.Entry{{URL: prURL, Repo: "flocasts/iam", Number: 412}}
+		return nil
+	})
+	code, _, errs := run(d, "poll")
+	if code != 1 || errs != "[herdr-pr] poll: gh down\n" {
 		t.Fatalf("exit %d, stderr %q", code, errs)
 	}
 }

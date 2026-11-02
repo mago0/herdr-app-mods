@@ -54,6 +54,7 @@ type Entry struct {
 	Last             Last
 	RevivedAs        string
 	RevivedCreatedMs int64
+	ReviveFailed     string // last revive error the parent was told about; cleared on a successful revive
 	Primed           bool
 }
 
