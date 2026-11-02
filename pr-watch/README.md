@@ -11,6 +11,7 @@ mkdir -p ~/.config/systemd/user
 cp systemd/herdr-pr-poll.service systemd/herdr-pr-poll.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now herdr-pr-poll.timer
+ln -s "$PWD/pi/herdr-pr-link.ts" ~/.pi/agent/extensions/herdr-pr-link.ts
 ```
 
 Or `nix build .#pr-watch` from the repo root; units are in `result/share/herdr-app-mods/pr-watch/systemd`.
