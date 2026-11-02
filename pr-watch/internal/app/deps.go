@@ -2,6 +2,7 @@
 package app
 
 import (
+	"io"
 	"io/fs"
 	"time"
 
@@ -19,4 +20,5 @@ type Deps struct {
 	Now            func() time.Time
 	LinkedWorktree func(path string) bool                 // a linked git worktree, not a main checkout; nil means ask git
 	Stat           func(path string) (fs.FileInfo, error) // nil means os.Stat
+	Stdin          io.Reader                              // hook payload
 }
