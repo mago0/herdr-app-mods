@@ -24,6 +24,7 @@ const usage = `usage: herdr-pr <command>
   watch <url> | unwatch <url>       start or stop waking the owner on updates
   ls [--agent <t>] [--with-children] [--json]
   poll                              one poll pass (run by the timer)
+  hook                              link PRs a finished shell command created (stdin: JSON)
 `
 
 // errUsage marks bad arguments; Run exits 2 for it.
@@ -54,6 +55,12 @@ func Run(args []string, d app.Deps, stdout, stderr io.Writer) int {
 		} else {
 			err = poll.Run(context.Background(), d)
 		}
+	case "hook":
+		// A hook never fails or prints: the agent's tool call must not notice it.
+		if err := c.hook(); err != nil {
+			c.logHook(err)
+		}
+		return 0
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -122,21 +129,31 @@ func (c *cmd) link(args []string) error {
 	if err != nil {
 		return err
 	}
-	o, err := owner.Resolve(c.d.Env, c.d.HC, c.d.ClaudeSessions, nil)
+	msg, err := c.linkRef(ref, *watch, *force)
 	if err != nil {
 		return err
+	}
+	fmt.Fprint(c.out, msg)
+	return nil
+}
+
+// linkRef records the calling agent as ref's owner and returns the line that reports it.
+func (c *cmd) linkRef(ref prurl.Ref, watch, force bool) (string, error) {
+	o, err := owner.Resolve(c.d.Env, c.d.HC, c.d.ClaudeSessions, nil)
+	if err != nil {
+		return "", err
 	}
 	// Priming from current state means only later changes can wake the owner.
 	b, err := c.d.GH.Fetch(context.Background(), []prurl.Ref{ref})
 	if err != nil {
-		return err
+		return "", err
 	}
 	pr, ok := b.PRs[ref.URL()]
 	if !ok {
-		return fmt.Errorf("%s not found on GitHub", ref.URL())
+		return "", fmt.Errorf("%s not found on GitHub", ref.URL())
 	}
 	// A PR that is already merged or closed is never fetched again, so a watch on it would never end.
-	watching := *watch && pr.State == "OPEN"
+	watching := watch && pr.State == "OPEN"
 	e := registry.Entry{
 		URL: ref.URL(), Repo: ref.Repo(), Number: ref.Number,
 		Owner: o, Watched: watching, LinkedAt: c.d.Now(),
@@ -144,7 +161,7 @@ func (c *cmd) link(args []string) error {
 	}
 	err = registry.Update(c.d.StatePath, func(r *registry.Registry) error {
 		cur := r.Find(e.URL)
-		if err := r.Add(e, *force); errors.Is(err, registry.ErrOwned) {
+		if err := r.Add(e, force); errors.Is(err, registry.ErrOwned) {
 			return fmt.Errorf("%s#%d is already linked by %s; use --force to take it", ref.Repo(), ref.Number, describe(cur.Owner))
 		} else if err != nil {
 			return err
@@ -155,17 +172,16 @@ func (c *cmd) link(args []string) error {
 		return nil
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	note := ""
 	switch {
 	case watching:
 		note = ", watching"
-	case *watch:
+	case watch:
 		note = "; not watching: the PR is " + strings.ToLower(pr.State)
 	}
-	fmt.Fprintf(c.out, "[herdr-pr] linked %s#%d to %s%s\n", ref.Repo(), ref.Number, describe(o), note)
-	return nil
+	return fmt.Sprintf("[herdr-pr] linked %s#%d to %s%s\n", ref.Repo(), ref.Number, describe(o), note), nil
 }
 
 func (c *cmd) unlink(args []string) error {

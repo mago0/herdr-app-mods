@@ -32,6 +32,7 @@ func main() {
 		StatePath:      statePath,
 		ClaudeSessions: filepath.Join(home, ".claude", "sessions"),
 		Now:            time.Now,
+		Stdin:          os.Stdin,
 	}
 	os.Exit(cli.Run(os.Args[1:], d, os.Stdout, os.Stderr))
 }

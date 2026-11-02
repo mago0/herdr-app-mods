@@ -1,0 +1,163 @@
+[
+  {
+    "name": "a plain create",
+    "input": "gh pr create --base main --head feature --title \"fix: 7 things\" --body-file /tmp/body.md",
+    "output": "https://github.com/owner/repository/pull/124\n",
+    "linked": [
+      124
+    ]
+  },
+  {
+    "name": "a Codex shell wrapper after a push",
+    "input": "/bin/zsh -lc \"git push -u origin feature 2>&1 | tail -2 && gh pr create --fill\"",
+    "output": "remote: Create a pull request for 'feature' on GitHub by visiting:\nremote:      https://github.com/owner/repository/pull/new/feature\nhttps://github.com/owner/repository/pull/124",
+    "linked": [
+      124
+    ]
+  },
+  {
+    "name": "a Codex script quoted in pieces around a heredoc",
+    "input": "/bin/zsh -lc \"cat > /tmp/body.md <<'EOF'\nSet the \"'`hidden`'\" flag.\nEOF\ngh pr create --fill --body-file /tmp/body.md\"",
+    "output": "https://github.com/owner/repository/pull/62\n",
+    "linked": [
+      62
+    ]
+  },
+  {
+    "name": "an older pull request read in the same command",
+    "input": "gh pr view 120 --json url --jq .url && gh pr create --fill",
+    "output": "https://github.com/owner/repository/pull/120\nhttps://github.com/owner/repository/pull/124",
+    "linked": [
+      124
+    ]
+  },
+  {
+    "name": "both layers of a stack",
+    "input": "gh pr create --base main --head a --fill && gh pr create --base a --head b --fill",
+    "output": "https://github.com/owner/repository/pull/124\nhttps://github.com/owner/repository/pull/125",
+    "linked": [
+      124,
+      125
+    ]
+  },
+  {
+    "name": "the first pull request of a new repository",
+    "input": "cargo test 2>&1 | tail -1 && timeout 60 gh pr create -R owner/repository --fill",
+    "output": "test result: ok\nhttps://github.com/owner/repository/pull/1",
+    "linked": [
+      1
+    ]
+  },
+  {
+    "name": "a GitLab merge request",
+    "input": "glab mr create --fill --yes",
+    "output": "!3 Fix the thing (feature)\n https://gitlab.com/owner/repository/-/merge_requests/3\n",
+    "linked": []
+  },
+  {
+    "name": "a new pull request whose number appears in the create command",
+    "input": "timeout 60 gh pr create --fill",
+    "output": "https://github.com/owner/repository/pull/60",
+    "linked": [
+      60
+    ]
+  },
+  {
+    "name": "a create subcommand that does not end its shell word",
+    "input": "gh pr create#typo; gh pr view --json url --jq .url",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": []
+  },
+  {
+    "name": "a create after an empty heredoc",
+    "input": "cat > /tmp/notes.md <<'EOF'\nEOF\ngh pr create --fill",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": [
+      124
+    ]
+  },
+  {
+    "name": "a read with no create",
+    "input": "gh pr view 124 --json url --jq .url",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": []
+  },
+  {
+    "name": "a create command quoted in another program's query",
+    "input": "sqlite3 audit.db \"select output from items where input like '%gh pr create%'\"",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": []
+  },
+  {
+    "name": "a create command with a separator inside quotes",
+    "input": "echo 'example: gh pr create; gh pr create --fill' && gh pr view --json url --jq .url",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": []
+  },
+  {
+    "name": "more URLs than create commands",
+    "input": "gh pr view --json url --jq .url && gh pr create --fill",
+    "output": "https://github.com/owner/repository/pull/120\nhttps://github.com/owner/repository/pull/124",
+    "linked": []
+  },
+  {
+    "name": "a create command only in heredoc text",
+    "input": "cat > notes.md <<'EOF'\nOpen it with gh pr create.\nEOF\ngh pr list --json url --jq '.[].url'",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": []
+  },
+  {
+    "name": "a create command after a comment that starts at a separator",
+    "input": "gh pr view --json url --jq .url;# note; gh pr create --fill",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": []
+  },
+  {
+    "name": "a create beside a command that lists other pull requests",
+    "input": "gh pr list --json url --jq '.[].url' && gh pr create --fill > /dev/null",
+    "output": "https://github.com/owner/repository/pull/120",
+    "linked": []
+  },
+  {
+    "name": "another host's URL beside a create command",
+    "input": "gh pr create --fill",
+    "output": "https://gitlab.com/owner/repository/-/merge_requests/3",
+    "linked": []
+  },
+  {
+    "name": "an existing pull request quoted in another command",
+    "input": "printf '%s\\n' 'https://github.com/owner/repository/pull/120'; gh pr create --fill > /dev/null",
+    "output": "https://github.com/owner/repository/pull/120",
+    "linked": []
+  },
+  {
+    "name": "gh pr create already exists",
+    "input": "gh pr create --fill",
+    "output": "a pull request for branch \"x\" into branch \"main\" already exists:\nhttps://github.com/owner/repository/pull/124",
+    "linked": [
+      124
+    ]
+  },
+  {
+    "name": "a bash -c wrapper",
+    "input": "bash -c 'gh pr create --fill'",
+    "output": "https://github.com/owner/repository/pull/9",
+    "linked": [
+      9
+    ]
+  },
+  {
+    "name": "an unquoted heredoc word followed by quoted text",
+    "input": "cat <<EOF\"x\"\ngh pr create\nEOF\ngh pr view --json url -q .url",
+    "output": "https://github.com/owner/repository/pull/124",
+    "linked": []
+  },
+  {
+    "name": "a create rewritten by rtk",
+    "input": "rtk gh pr create --base main --fill",
+    "output": "https://github.com/owner/repository/pull/77",
+    "linked": [
+      77
+    ]
+  }
+]
