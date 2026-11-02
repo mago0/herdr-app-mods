@@ -13,7 +13,7 @@ mkdir -p "$work/bin" "$work/fake" "$work/state"
 cat >"$work/bin/hc" <<'FAKE'
 #!/usr/bin/env bash
 case "$1" in
-  get) cat "$FAKE/$2.json" ;;
+  get) sed "s/@PI_PID@/$(cat "$FAKE/pi.pid")/" "$FAKE/$2.json" ;;
   send) printf 'send %s %s\n' "$2" "$3" >>"$FAKE/hc.log" ;;
   *) echo "fake hc: unexpected: $*" >&2; exit 1 ;;
 esac
@@ -27,11 +27,19 @@ case "$4" in
   *) cat "$FAKE/pr.json" ;;
 esac
 FAKE
-chmod +x "$work/bin/hc" "$work/bin/gh"
+
+# Fake pi: the nearest pi ancestor of herdr-pr, so the result does not depend on who runs
+# the test. Its comm is "pi" (script file name); it must stay the parent, hence no exec.
+cat >"$work/bin/pi" <<'FAKE'
+#!/bin/sh
+echo $$ >"$FAKE/pi.pid"
+"$@"
+FAKE
+chmod +x "$work/bin/hc" "$work/bin/gh" "$work/bin/pi"
 
 cat >"$work/fake/t3.json" <<'JSON'
 {"address":"t3","created_ms":1000,"cwd":"/tmp","state":"live","labels":{"herdr.space":"s1","herdr.tab":"tab1"},
- "status":{"app":"pi","state":"idle"},"foreground":{"name":"pi","pid":4242,"argv":["pi"],"cwd":"/tmp"}}
+ "status":{"app":"pi","state":"idle"},"foreground":{"name":"pi","pid":@PI_PID@,"argv":["pi"],"cwd":"/tmp"}}
 JSON
 
 pr() { # pr <reviews-json>
@@ -47,7 +55,7 @@ export HC_TERMINAL_ID=t3 PI_SESSION_ID=sess-1 PI_SESSION_FILE="$work/sess-1.json
 url=https://github.com/acme/widgets/pull/7
 
 pr '[]'
-herdr-pr link "$url" --watch
+pi herdr-pr link "$url" --watch
 
 pr '[{"id":"R1","state":"CHANGES_REQUESTED","body":"fix it","author":{"login":"alice","__typename":"User"}}]'
 herdr-pr poll
