@@ -78,7 +78,7 @@ func Run(ctx context.Context, d app.Deps) error {
 			}
 			cur.Display, cur.Last = e.Display, e.Last
 			cur.RevivedAs, cur.RevivedCreatedMs, cur.RevivedAtMs = e.RevivedAs, e.RevivedCreatedMs, e.RevivedAtMs
-			cur.ReviveFailed = e.ReviveFailed
+			cur.ReviveFailed, cur.ReviveFailedTold = e.ReviveFailed, e.ReviveFailedTold
 			if p.ended[e.URL] {
 				cur.Watched = false
 			}
@@ -133,6 +133,8 @@ func (p *pass) handle(e *registry.Entry, pr github.PR) {
 	if !p.send(addr, deliver.OwnerMessage(*e, evs)) {
 		return
 	}
+	// A revived session that has taken a message has started; closing it later is not a startup failure.
+	e.RevivedAtMs = 0
 	parentLive := p.parent(e) == deliver.Live
 	if parentLive {
 		p.send(e.Owner.Parent, deliver.ParentFYI(*e, addr, evs))
@@ -156,17 +158,20 @@ func (p *pass) parent(e *registry.Entry) deliver.Liveness {
 	return l
 }
 
-// startupWindow is how soon a revived terminal may disappear before the revive counts as failed.
+// startupWindow is how soon a revived terminal may disappear, before its first delivery, for the revive to count as failed.
 const startupWindow = 10 * time.Minute
 
 // revive starts the owner again; delivery waits for the next pass, when the new terminal has settled.
 // A recorded failure stops further revives until `watch` re-arms, so a session that cannot start is not respawned forever.
 func (p *pass) revive(e *registry.Entry) {
 	if e.ReviveFailed != "" {
+		if !e.ReviveFailedTold {
+			p.tellReviveFailed(e, p.parent(e))
+		}
 		return
 	}
 	pl := p.parent(e)
-	if e.RevivedAs != "" && p.now.Sub(time.UnixMilli(e.RevivedAtMs)) < startupWindow {
+	if e.RevivedAs != "" && e.RevivedAtMs != 0 && p.now.Sub(time.UnixMilli(e.RevivedAtMs)) < startupWindow {
 		p.reviveFailed(e, pl, errors.New("revived session exited at startup"))
 		return
 	}
@@ -179,12 +184,20 @@ func (p *pass) revive(e *registry.Entry) {
 	e.RevivedAs, e.RevivedCreatedMs, e.RevivedAtMs = t.Address, t.CreatedMs, p.now.UnixMilli()
 }
 
-// reviveFailed records err and tells a live parent; a busy or gone parent is not told later.
 func (p *pass) reviveFailed(e *registry.Entry, parent deliver.Liveness, err error) {
-	e.ReviveFailed = err.Error()
+	e.ReviveFailed, e.ReviveFailedTold = err.Error(), false
 	p.errs = append(p.errs, fmt.Errorf("%s: revive: %w", ref(e), err))
-	if parent == deliver.Live {
-		p.send(e.Owner.Parent, fmt.Sprintf("[herdr-pr] FYI, no action needed: cannot revive the owner of %s: %v. The watch stays on.", ref(e), err))
+	p.tellReviveFailed(e, parent)
+}
+
+// tellReviveFailed tells the parent once, on the first pass it is Live, so a busy parent hears later.
+func (p *pass) tellReviveFailed(e *registry.Entry, parent deliver.Liveness) {
+	if parent != deliver.Live {
+		return
+	}
+	msg := fmt.Sprintf("[herdr-pr] FYI, no action needed: cannot revive the owner of %s: %s. The watch stays on.", ref(e), e.ReviveFailed)
+	if p.send(e.Owner.Parent, msg) {
+		e.ReviveFailedTold = true
 	}
 }
 

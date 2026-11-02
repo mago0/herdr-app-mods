@@ -595,3 +595,61 @@ func TestPollRevivedGoneLaterIsRevivedAgain(t *testing.T) {
 		t.Errorf("entry = %+v", got)
 	}
 }
+
+func TestPollReviveFailureToldWhenParentFreesUp(t *testing.T) {
+	e := watched(t)
+	e.Owner.Cwd = "/nonexistent/x"
+	d, c, gh := setup(t, e)
+	delete(c.terms, "t2")
+	c.terms["t1"] = term("t1", 11, "working")
+	gh.prs[prURL] = openPR(oldComment, review)
+	if err := Run(context.Background(), d); err == nil {
+		t.Fatal("want revive error")
+	}
+	if got := c.to("t1"); len(got) != 0 {
+		t.Fatalf("busy parent got %q", got)
+	}
+
+	c.terms["t1"] = term("t1", 11, "idle")
+	run(t, d)
+	run(t, d)
+	want := "[herdr-pr] FYI, no action needed: cannot revive the owner of flocasts/iam#412: cwd missing: /nonexistent/x. The watch stays on."
+	if got := c.to("t1"); !slices.Equal(got, []string{want}) {
+		t.Errorf("parent got %q", got)
+	}
+	if len(c.runs) != 0 {
+		t.Errorf("hc run %d times", len(c.runs))
+	}
+	if got := load(t, d); !got.ReviveFailedTold {
+		t.Errorf("entry = %+v", got)
+	}
+}
+
+func TestPollRevivedClosedAfterDeliveryIsRevivedAgain(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	now := clock(&d)
+	delete(c.terms, "t2")
+	c.runAs = hc.Terminal{Address: "t9", CreatedMs: 99}
+	gh.prs[prURL] = openPR(oldComment, review)
+	run(t, d)
+
+	*now = now.Add(2 * time.Minute)
+	c.terms["t9"] = term("t9", 99, "idle")
+	run(t, d)
+	if got := c.to("t9"); len(got) != 1 {
+		t.Fatalf("revived owner got %q", got)
+	}
+
+	// The user closes the revived session, then a new comment arrives, all inside the startup window.
+	*now = now.Add(2 * time.Minute)
+	delete(c.terms, "t9")
+	c.runAs = hc.Terminal{Address: "t10", CreatedMs: 100}
+	gh.prs[prURL] = openPR(oldComment, review, github.Item{ID: "c2", Kind: "comment", Author: github.Actor{Login: "carol"}, Body: "nit"})
+	run(t, d)
+	if len(c.runs) != 2 {
+		t.Errorf("hc run %d times", len(c.runs))
+	}
+	if got := load(t, d); got.RevivedAs != "t10" || got.ReviveFailed != "" {
+		t.Errorf("entry = %+v", got)
+	}
+}

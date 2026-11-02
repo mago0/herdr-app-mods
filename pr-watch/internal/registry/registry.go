@@ -56,6 +56,7 @@ type Entry struct {
 	RevivedCreatedMs int64
 	RevivedAtMs      int64  // when the last revive started; a revived terminal gone soon after died at startup
 	ReviveFailed     string // why reviving failed; no revive is tried while set, `watch` re-arms
+	ReviveFailedTold bool   // the parent has been told about ReviveFailed
 	Primed           bool
 }
 

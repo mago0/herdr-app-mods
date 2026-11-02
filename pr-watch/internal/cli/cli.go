@@ -197,7 +197,7 @@ func (c *cmd) setWatched(args []string, name string, on bool) error {
 		e.Watched = on
 		if on {
 			// Re-arm revival after a failure; a zero start time lets the dead revived terminal be replaced.
-			e.ReviveFailed, e.RevivedAtMs = "", 0
+			e.ReviveFailed, e.ReviveFailedTold, e.RevivedAtMs = "", false, 0
 		}
 		return nil
 	})
