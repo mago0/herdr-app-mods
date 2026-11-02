@@ -99,7 +99,6 @@ export default class PrWatch extends View {
     });
   }
 
-
   choose(i, cx) {
     const it = menuItems(props().menu)[i];
     if (!it) return;
