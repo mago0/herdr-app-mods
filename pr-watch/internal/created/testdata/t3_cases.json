@@ -151,5 +151,13 @@
     "input": "cat <<EOF\"x\"\ngh pr create\nEOF\ngh pr view --json url -q .url",
     "output": "https://github.com/owner/repository/pull/124",
     "linked": []
+  },
+  {
+    "name": "a create rewritten by rtk",
+    "input": "rtk gh pr create --base main --fill",
+    "output": "https://github.com/owner/repository/pull/77",
+    "linked": [
+      77
+    ]
   }
 ]

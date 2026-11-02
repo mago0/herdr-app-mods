@@ -24,8 +24,8 @@ func TestByT3Cases(t *testing.T) {
 	if err := json.Unmarshal(raw, &cases); err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) != 22 {
-		t.Fatalf("want 22 cases, got %d", len(cases))
+	if len(cases) != 23 {
+		t.Fatalf("want 23 cases, got %d", len(cases))
 	}
 	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {

@@ -17,7 +17,8 @@ import (
 var (
 	createCommand = regexp.MustCompile(`\bgh\s+pr\s+create\b`)
 	// A create command counts only where a command starts, after any env assignments or wrappers.
-	createRun = regexp.MustCompile("(?:^|[;&|({`\\n]|\\b(?:do|then|else)\\s)\\s*(?:(?:\\w+=\\S*|env|time|nohup|timeout\\s+\\S+)\\s+)*gh\\s+pr\\s+create")
+	// rtk is added to T3's list: its agent hooks rewrite `gh ...` to `rtk gh ...` before it runs.
+	createRun = regexp.MustCompile("(?:^|[;&|({`\\n]|\\b(?:do|then|else)\\s)\\s*(?:(?:\\w+=\\S*|env|time|nohup|rtk|timeout\\s+\\S+)\\s+)*gh\\s+pr\\s+create")
 	// Codex-style `sh -lc '<script>'`, quoted in pieces.
 	shellWrapper   = regexp.MustCompile(`^\s*(?:\S*/)?(?:ba|z|da|k)?sh\s+-l?c\s+(["'][\s\S]*)$`)
 	shellWordPiece = regexp.MustCompile(`"((?:\\[\s\S]|[^"\\])*)"|'([^']*)'|\\([\s\S])|(\S)`)
