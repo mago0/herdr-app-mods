@@ -8,6 +8,10 @@ func TestParseVariants(t *testing.T) {
 		"https://github.com/FloCasts/IAM/pull/412",
 		"http://github.com/flocasts/iam/pull/412/files",
 		"github.com/flocasts/iam/pull/412/",
+		"https://github.com/flocasts/iam/pull/412#issuecomment-1",
+		"https://github.com/flocasts/iam/pull/412?notification_referrer_id=x",
+		"https://github.com/flocasts/iam/pull/412/files#diff-1",
+		"https://www.GitHub.com/flocasts/iam/pull/412",
 	} {
 		r, err := Parse(in)
 		if err != nil {
@@ -20,7 +24,12 @@ func TestParseVariants(t *testing.T) {
 			t.Errorf("Parse(%q) repo/number = %q/%d", in, r.Repo(), r.Number)
 		}
 	}
-	for _, in := range []string{"https://github.com/flocasts/iam/issues/412", "not a url"} {
+	for _, in := range []string{
+		"https://github.com/flocasts/iam/issues/412",
+		"https://github.com/flocasts/iam/pull/412abc",
+		"https://notgithub.com/flocasts/iam/pull/412",
+		"not a url",
+	} {
 		if _, err := Parse(in); err == nil {
 			t.Errorf("Parse(%q): want error", in)
 		}

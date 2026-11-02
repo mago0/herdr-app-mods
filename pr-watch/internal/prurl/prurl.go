@@ -14,9 +14,10 @@ type Ref struct {
 	Number      int
 }
 
-var pullRe = regexp.MustCompile(`^(?:https?://)?github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)(?:/.*)?$`)
+var pullRe = regexp.MustCompile(`^(?i:(?:https?://)?(?:www\.)?github\.com)/([^/\s?#]+)/([^/\s?#]+)/pull/(\d+)(?:[/?#].*)?$`)
 
-// Parse accepts a PR URL with or without scheme, trailing slash or sub-path such as /files.
+// Parse accepts a PR URL with or without scheme or www., in any host case, with an
+// optional trailing slash, sub-path such as /files, query or #fragment.
 func Parse(raw string) (Ref, error) {
 	m := pullRe.FindStringSubmatch(strings.TrimSpace(raw))
 	if m == nil {
