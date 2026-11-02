@@ -2,6 +2,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -14,12 +15,21 @@ import (
 )
 
 func main() {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[herdr-pr] no home directory:", err)
+		os.Exit(1)
+	}
+	statePath, err := registry.Path()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[herdr-pr]", err)
+		os.Exit(1)
+	}
 	d := app.Deps{
 		Env:            os.Getenv,
 		HC:             hc.New("hc"),
 		GH:             github.New(),
-		StatePath:      registry.Path(),
+		StatePath:      statePath,
 		ClaudeSessions: filepath.Join(home, ".claude", "sessions"),
 		Now:            time.Now,
 	}

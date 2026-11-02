@@ -68,10 +68,11 @@ func claudeTerm(addr, session string) hc.Terminal {
 func deps(t *testing.T, terminal string, c fakeHC, gh *fakeGH) app.Deps {
 	t.Helper()
 	return app.Deps{
-		Env:            func(k string) string { return map[string]string{"HC_TERMINAL_ID": terminal}[k] },
-		HC:             c,
-		GH:             gh,
-		StatePath:      filepath.Join(t.TempDir(), "registry.json"),
+		Env: func(k string) string { return map[string]string{"HC_TERMINAL_ID": terminal}[k] },
+		HC:  c,
+		GH:  gh,
+		// The state directory does not exist yet, as on first use.
+		StatePath:      filepath.Join(t.TempDir(), "herdr-pr", "registry.json"),
 		ClaudeSessions: t.TempDir(),
 		Now:            func() time.Time { return time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC) },
 	}

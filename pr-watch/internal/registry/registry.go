@@ -4,6 +4,7 @@ package registry
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -61,13 +62,18 @@ type Registry struct {
 	Entries []Entry
 }
 
-// Path is the registry file: HERDR_PR_STATE if set, else the user state directory.
-func Path() string {
-	if p := os.Getenv("HERDR_PR_STATE"); p != "" {
-		return p
+// Path is registry.json in the state directory: HERDR_PR_STATE if set, else
+// ~/.local/state/herdr-pr. The Herdr mod watches that directory.
+func Path() (string, error) {
+	dir := os.Getenv("HERDR_PR_STATE")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("registry: no state directory: %w", err)
+		}
+		dir = filepath.Join(home, ".local", "state", "herdr-pr")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "herdr-pr", "registry.json")
+	return filepath.Join(dir, "registry.json"), nil
 }
 
 // Load reads the registry without locking. A missing file is an empty registry.
@@ -93,7 +99,7 @@ func Load(path string) (*Registry, error) {
 // When fn fails the file stays as it was.
 func Update(path string, fn func(*Registry) error) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, "registry.lock"), os.O_CREATE|os.O_RDWR, 0o644)

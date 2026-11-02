@@ -69,6 +69,45 @@ func TestUpdateConcurrent(t *testing.T) {
 	}
 }
 
+func TestPathUsesStateDir(t *testing.T) {
+	t.Setenv("HERDR_PR_STATE", "/x")
+	p, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p != "/x/registry.json" {
+		t.Fatalf("Path() = %q, want /x/registry.json", p)
+	}
+
+	t.Setenv("HERDR_PR_STATE", "")
+	t.Setenv("HOME", "/home/u")
+	if p, err := Path(); err != nil || p != "/home/u/.local/state/herdr-pr/registry.json" {
+		t.Fatalf("default Path() = %q, %v", p, err)
+	}
+}
+
+func TestUpdateCreatesStateDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state", "herdr-pr")
+	p := filepath.Join(dir, "registry.json")
+	if err := Update(p, func(r *Registry) error {
+		return r.Add(entry("https://github.com/a/b/pull/1", "S"), false)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o700 {
+		t.Errorf("dir mode = %o, want 700", perm)
+	}
+	for _, name := range []string{"registry.json", "registry.lock"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestUpdateAtomicOnError(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "registry.json")
 	if err := Update(p, func(r *Registry) error {
