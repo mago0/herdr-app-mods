@@ -29,9 +29,11 @@ Two adapters feed it:
 
   ```json
   "PostToolUse": [
-    { "matcher": "Bash", "hooks": [{ "type": "command", "command": "herdr-pr hook", "async": true }] }
+    { "matcher": "Bash", "hooks": [{ "type": "command", "command": "setsid -f herdr-pr hook", "async": true }] }
   ]
   ```
+
+  `setsid -f` matters for `claude -p`: it kills async hooks that are still running when it exits, which drops the link when `gh pr create` is its last step.
 
 The hook never prints or fails; problems go to `hook.log` beside the registry. A PR another agent already owns is left alone.
 
