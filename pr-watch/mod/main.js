@@ -3,10 +3,9 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, hc, home, focused, terminals, theme, props, openOverlay, closeOverlay, notify, watchFolder, shared, setShared } from "herdr";
+import { exec, home, focused, terminals, theme, props, openOverlay, closeOverlay, notify, watchFolder, shared, setShared } from "herdr";
 
 const STATE = home() + "/.local/state/herdr-pr";
-const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
 const EYE = "mods/pr-watch/eye.svg";
 // Bumped by the menu after an action so every panel copy refreshes at once.
 const REV = "pr-watch.rev";
@@ -25,7 +24,6 @@ async function act(command, args) {
   return false;
 }
 
-const short = (url) => url.replace(/^https:\/\/github\.com\/(.+)\/pull\/(\d+)$/, "$1#$2");
 const words = (s) => s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ");
 
 function menuItems(m) {
@@ -61,16 +59,11 @@ export default class PrWatch extends View {
     }
     this.agent = undefined;
     this.data = null;
-    this.seen = [];
     this.rev = shared(REV);
-    cx.timer.every(10000, (cx) => {
-      this.watch(cx);
-      this.refresh(cx);
-    });
     this.watch(cx);
   }
 
-  // Wakes on registry writes. The folder appears with the first link, so the timer retries a failed watch.
+  // Wakes on registry writes. The folder appears with the first link, so a focus change retries a failed watch.
   watch(cx) {
     if (this.watching) return;
     this.watching = true;
@@ -91,10 +84,7 @@ export default class PrWatch extends View {
     if (!agent) return;
     cx.spawn(async (cx) => {
       const fail = (e) => ({ code: -1, stdout: "", stderr: String(e) });
-      const [ls, out] = await Promise.all([
-        exec("herdr-pr", ["ls", "--agent", agent, "--with-children", "--json"]).catch(fail),
-        hc(["read", agent, "--lines", "400"]).catch(fail),
-      ]);
+      const ls = await exec("herdr-pr", ["ls", "--agent", agent, "--with-children", "--json"]).catch(fail);
       // Focus moved on while this ran.
       if (agent !== this.agent) return;
       if (ls.code === 0) {
@@ -105,18 +95,10 @@ export default class PrWatch extends View {
           this.error = `herdr-pr ls: ${e}`;
         }
       } else this.error = (ls.stderr || ls.stdout).trim() || `herdr-pr ls exited ${ls.code}`;
-      this.seen = [...new Set(out.stdout.match(PR_URL) ?? [])];
       cx.notify();
     });
   }
 
-  link(url, cx) {
-    const agent = this.agent;
-    // The CLI resolves the owner from HC_TERMINAL_ID; exec takes no env, so env(1) sets it.
-    cx.spawn(async (cx) => {
-      if (await act("env", ["HC_TERMINAL_ID=" + agent, "herdr-pr", "link", url, "--watch"])) this.refresh(cx);
-    });
-  }
 
   choose(i, cx) {
     const it = menuItems(props().menu)[i];
@@ -190,39 +172,6 @@ export default class PrWatch extends View {
       .when(Boolean(e.review), (el) => el.child(div().truncate().text_size(11).text_color(t.dim).child(words(e.review))));
   }
 
-  seenRow(t, url) {
-    return h_flex()
-      .id(`seen-${url}`)
-      .px(8)
-      .h(28)
-      .flex_none()
-      .gap(6)
-      .items_center()
-      .rounded(8)
-      .cursor_pointer()
-      .hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => cx.spawn(async () => act("xdg-open", [url])))
-      .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(short(url)))
-      .child(div()
-        .id(`link-${url}`)
-        .flex_none()
-        .px(6)
-        .h(20)
-        .rounded(5)
-        .flex()
-        .items_center()
-        .text_size(11)
-        .text_color(t.muted)
-        .border(1)
-        .border_color(t.border)
-        .hover((s) => s.bg(t.raised).text_color(t.foreground))
-        .on_click((_e, cx) => {
-          cx.stop_propagation();
-          this.link(url, cx);
-        })
-        .child("Link"));
-  }
-
   header(t, label, dim = false) {
     return div().px(8).pt(10).pb(3).flex_none().truncate().text_size(11).font_medium().text_color(dim ? t.dim : t.muted).child(label);
   }
@@ -235,8 +184,8 @@ export default class PrWatch extends View {
     if (agent !== this.agent) {
       this.agent = agent;
       this.data = null;
-      this.seen = [];
       this.error = null;
+      this.watch(cx);
       this.refresh(cx);
     }
     const rev = shared(REV);
@@ -259,12 +208,6 @@ export default class PrWatch extends View {
         const dim = !live.has(g.owner.address);
         rows.push(this.header(t, `${g.owner.address || "background child"} · ${g.owner.kind}`, dim));
         rows.push(...g.prs.map((e) => this.row(t, e, dim)));
-      }
-      const known = new Set([...own, ...children.flatMap((g) => g.prs)].map((e) => e.url));
-      const unlinked = this.seen.filter((u) => !known.has(u));
-      if (unlinked.length) {
-        rows.push(this.header(t, "Seen in output", true));
-        rows.push(...unlinked.map((u) => this.seenRow(t, u)));
       }
     }
 
