@@ -1,0 +1,9 @@
+[Unit]
+Description=herdr-pr poll: wake agents whose PR needs action
+
+[Service]
+Type=oneshot
+# A hung gh or hc call must not stall every later pass.
+TimeoutStartSec=5min
+ExecStart=%h/.local/bin/herdr-pr poll
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/bin

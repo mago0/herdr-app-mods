@@ -1,0 +1,37 @@
+fragment PRFields on PullRequest {
+  url
+  title
+  state
+  isDraft
+  mergeable
+  reviewDecision
+  commits(last: 1) {
+    nodes {
+      commit {
+        oid
+        statusCheckRollup {
+          state
+          contexts(first: 50) {
+            nodes {
+              ... on CheckRun { name conclusion }
+              ... on StatusContext { context state }
+            }
+          }
+        }
+      }
+    }
+  }
+  reviews(last: 50) {
+    nodes { id state body author { login __typename } }
+  }
+  comments(last: 50) {
+    nodes { id body author { login __typename } }
+  }
+  reviewThreads(last: 50) {
+    nodes {
+      comments(last: 20) {
+        nodes { id body author { login __typename } }
+      }
+    }
+  }
+}
