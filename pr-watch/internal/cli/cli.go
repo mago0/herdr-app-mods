@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/app"
-	"github.com/mago0/herdr-app-mods/pr-watch/internal/github"
+	"github.com/mago0/herdr-app-mods/pr-watch/internal/events"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/owner"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/prurl"
 	"github.com/mago0/herdr-app-mods/pr-watch/internal/registry"
@@ -134,7 +134,7 @@ func (c *cmd) link(args []string) error {
 	e := registry.Entry{
 		URL: ref.URL(), Repo: ref.Repo(), Number: ref.Number,
 		Owner: o, Watched: *watch, LinkedAt: c.d.Now(),
-		Display: displayOf(pr), Last: lastOf(pr), Primed: true,
+		Display: events.DisplayOf(pr), Last: events.Next(pr), Primed: true,
 	}
 	err = registry.Update(c.d.StatePath, func(r *registry.Registry) error {
 		cur := r.Find(e.URL)
@@ -214,22 +214,6 @@ func describe(o registry.Owner) string {
 		return fmt.Sprintf("%s (%s session %s)", o.Address, o.Kind, o.SessionID)
 	}
 	return fmt.Sprintf("%s session %s inside %s", o.Kind, o.SessionID, o.Parent)
-}
-
-func displayOf(p github.PR) registry.Display {
-	return registry.Display{Title: p.Title, State: p.State, Draft: p.Draft, CI: p.CI, Review: p.ReviewDecision}
-}
-
-// lastOf marks everything currently on the PR as already seen.
-func lastOf(p github.PR) registry.Last {
-	l := registry.Last{State: p.State, Conflicting: p.Mergeable == "CONFLICTING"}
-	for _, it := range p.Items {
-		l.SeenIDs = append(l.SeenIDs, it.ID)
-	}
-	if p.CI == "FAILURE" {
-		l.CIFailingSHA = p.HeadSHA
-	}
-	return l
 }
 
 type entryView struct {
