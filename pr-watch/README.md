@@ -80,7 +80,8 @@ The watch ends on the pass that sees the PR merged or closed, with one message p
 
 - A ready owner gets `[herdr-pr] <repo>#<n> was merged. Watch ended.` (or `closed`), followed by any other events of that pass. The watch ends once this send succeeds.
 - A ready parent gets `[herdr-pr] FYI, no action needed: <repo>#<n> (child <terminal>) was merged. Watch ended.`
-- An owner that is busy or gone is not revived or waited for: the parent is told if it is ready, and the watch ends anyway.
+- An owner that is busy or gone is not revived: the parent is told if it is ready, and the watch ends.
+- If neither is ready but one is only busy, the watch stays on and the note goes out on a later pass. Only when both are gone does the watch end with nobody told.
 
 ## Revival
 

@@ -227,7 +227,8 @@ func (p *pass) delivered(e *registry.Entry) {
 
 // finish ends the watch on merge or close with one message per recipient. It never revives:
 // a Live owner is told and the watch ends once that send succeeds; otherwise the parent, if
-// Live, is told and the watch ends anyway, since a gone owner may never come back.
+// Live, is told and the watch ends anyway, since a gone owner may never come back. When
+// neither is Live but one is only busy, the watch stays on so the note goes out next pass.
 func (p *pass) finish(e *registry.Entry, pr github.PR, evs []events.Event, addr string, live deliver.Liveness) {
 	state := strings.ToLower(pr.State)
 	var others []events.Event
@@ -236,7 +237,11 @@ func (p *pass) finish(e *registry.Entry, pr github.PR, evs []events.Event, addr 
 			others = append(others, ev)
 		}
 	}
-	parentLive := p.parent(e) == deliver.Live
+	parent := p.parent(e)
+	parentLive := parent == deliver.Live
+	if live != deliver.Live && !parentLive && (live == deliver.Busy || parent == deliver.Busy) {
+		return
+	}
 	wt := p.freeWorktree(e)
 	ownerWT, parentWT := "", wt
 	if !parentLive {
