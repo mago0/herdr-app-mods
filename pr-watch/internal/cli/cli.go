@@ -134,7 +134,7 @@ func (c *cmd) link(args []string) error {
 	e := registry.Entry{
 		URL: ref.URL(), Repo: ref.Repo(), Number: ref.Number,
 		Owner: o, Watched: *watch, LinkedAt: c.d.Now(),
-		Display: events.DisplayOf(pr), Last: events.Next(pr), Primed: true,
+		Display: events.DisplayOf(pr), Last: events.Next(registry.Last{}, pr), Primed: true,
 	}
 	err = registry.Update(c.d.StatePath, func(r *registry.Registry) error {
 		cur := r.Find(e.URL)

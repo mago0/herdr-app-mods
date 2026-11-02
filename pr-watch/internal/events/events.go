@@ -66,8 +66,12 @@ func Classify(prev registry.Last, cur github.PR, viewer string) []Event {
 }
 
 // Next is the state to store after handling cur: everything on the PR counts as seen.
-func Next(cur github.PR) registry.Last {
+func Next(prev registry.Last, cur github.PR) registry.Last {
 	l := registry.Last{State: cur.State, Conflicting: cur.Mergeable == "CONFLICTING"}
+	// UNKNOWN is GitHub recomputing mergeability; keep the flag so the same conflict does not re-wake.
+	if cur.Mergeable == "UNKNOWN" {
+		l.Conflicting = prev.Conflicting
+	}
 	for _, it := range cur.Items {
 		l.SeenIDs = append(l.SeenIDs, it.ID)
 	}

@@ -55,11 +55,11 @@ func TestClassifyCIOncePerSHA(t *testing.T) {
 	if !reflect.DeepEqual(evs, want) {
 		t.Fatalf("got %+v", evs)
 	}
-	if again := Classify(Next(cur), cur, "mago0"); len(again) != 0 {
+	if again := Classify(Next(registry.Last{}, cur), cur, "mago0"); len(again) != 0 {
 		t.Fatalf("second pass: %+v", again)
 	}
 	cur.HeadSHA = "ffffffff00"
-	if got := Classify(Next(github.PR{State: "OPEN", CI: "FAILURE", HeadSHA: "a1b2c3d4e5"}), cur, "mago0"); len(got) != 1 {
+	if got := Classify(Next(registry.Last{}, github.PR{State: "OPEN", CI: "FAILURE", HeadSHA: "a1b2c3d4e5"}), cur, "mago0"); len(got) != 1 {
 		t.Fatalf("new sha: %+v", got)
 	}
 }
@@ -69,8 +69,22 @@ func TestClassifyConflictOnce(t *testing.T) {
 	if got := kinds(Classify(registry.Last{State: "OPEN"}, cur, "v")); !reflect.DeepEqual(got, []string{"conflict"}) {
 		t.Fatalf("got %v", got)
 	}
-	if got := Classify(Next(cur), cur, "v"); len(got) != 0 {
+	if got := Classify(Next(registry.Last{}, cur), cur, "v"); len(got) != 0 {
 		t.Fatalf("repeat: %+v", got)
+	}
+}
+
+func TestConflictSurvivesUnknown(t *testing.T) {
+	var last registry.Last
+	last.State = "OPEN"
+	n := 0
+	for _, m := range []string{"CONFLICTING", "UNKNOWN", "CONFLICTING"} {
+		cur := github.PR{State: "OPEN", Mergeable: m}
+		n += len(Classify(last, cur, "v"))
+		last = Next(last, cur)
+	}
+	if n != 1 {
+		t.Fatalf("conflict events = %d, want 1", n)
 	}
 }
 
@@ -99,7 +113,7 @@ func TestNextAndDisplayOf(t *testing.T) {
 	pr := github.PR{State: "OPEN", Title: "t", Draft: true, CI: "FAILURE", ReviewDecision: "APPROVED", HeadSHA: "abc", Mergeable: "CONFLICTING",
 		Items: []github.Item{{ID: "1"}, {ID: "2"}}}
 	want := registry.Last{State: "OPEN", SeenIDs: []string{"1", "2"}, CIFailingSHA: "abc", Conflicting: true}
-	if got := Next(pr); !reflect.DeepEqual(got, want) {
+	if got := Next(registry.Last{}, pr); !reflect.DeepEqual(got, want) {
 		t.Errorf("Next = %+v", got)
 	}
 	if got := DisplayOf(pr); got != (registry.Display{Title: "t", State: "OPEN", Draft: true, CI: "FAILURE", Review: "APPROVED"}) {
