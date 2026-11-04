@@ -10,7 +10,8 @@ const EYE = "mods/pr-watch/eye.svg";
 // Bumped by the menu after an action so every panel copy refreshes at once.
 const REV = "pr-watch.rev";
 
-const agentOf = () => focused()?.agent ?? focused()?.terminal ?? null;
+// The focused pane's terminal first: `agent` only tracks agent layout blocks and can lag a space switch.
+const agentOf = () => focused()?.terminal ?? focused()?.agent ?? null;
 
 // Runs a command for an action; a failure (herdr-pr prints `[herdr-pr] ...` on stderr) becomes a toast.
 async function act(command, args) {
@@ -213,8 +214,10 @@ export default class PrWatch extends View {
     return v_flex()
       .size_full()
       .min_h(0)
-      .bg(t.chrome)
-      .border_l(1)
+      .rounded(10)
+      .overflow_hidden()
+      .bg(t.background)
+      .border_1()
       .border_color(t.border)
       .text_size(13)
       .child(h_flex()
