@@ -16,6 +16,21 @@ ln -s "$PWD/pi/herdr-pr-link.ts" ~/.pi/agent/extensions/herdr-pr-link.ts
 
 Or `nix build .#pr-watch` from the repo root; units are in `result/share/herdr-app-mods/pr-watch/systemd`.
 
+### Herdr panel
+
+Copy the mod into Herdr; it reloads within a second. Run this again after each change to `mod/`. Herdr does not follow a symlinked mod folder: assets go missing and edits do not reload.
+
+```sh
+rsync -a --delete --exclude '*.d.ts' --exclude jsconfig.json mod/ ~/.config/herdr-app/mods/pr-watch/
+```
+
+The mod has no place of its own (`"place": "none"`). Show it as a tab of the right side panel, beside Files and Changes:
+
+- In a cloned layout (`herdr-app do layout.clone '{"name":"main","as":"main-prs"}'`), add a child to the `panel-body` stack: `{ "id": "prs", "type": "block", "content": { "mod": "pr-watch" } }`.
+- In a cloned `tabs` mod used by that layout, add a button beside the others: `.child(panelButton("prs", "PRs", "mods/pr-watch/eye.svg"))`, and add `"prs"` to its `enabled` list so the panel choice is remembered per space.
+
+The panel lists the PRs of the agent in the focused pane and of its direct children.
+
 The service needs `hc` and `gh` on its PATH. The unit sets `PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/bin`; edit it if they live elsewhere. The timer polls every 2 minutes.
 
 ## Automatic linking
