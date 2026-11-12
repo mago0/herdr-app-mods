@@ -110,6 +110,8 @@ var gitToplevel = func(dir string) string {
 
 // inProcessChild reports whether the pi session calling herdr-pr is not the terminal's own pi.
 // pi does not export its session id to its own environment, so the pid is compared instead.
+// A wrapper such as atuin's pty-proxy can hold the foreground and hide the terminal's own pi;
+// then only a pi started under another pi (a subagent) is a child.
 func inProcessChild(t hc.Terminal, label, session string, proc ProcFunc) bool {
 	if label != "" && label != session {
 		return true
@@ -117,23 +119,32 @@ func inProcessChild(t hc.Terminal, label, session string, proc ProcFunc) bool {
 	if t.Foreground == nil {
 		return false
 	}
-	pid, ok := nearestPi(proc)
-	return ok && pid != t.Foreground.Pid
+	pid, nested, ok := nearestPi(proc)
+	if !ok {
+		return false
+	}
+	if t.Foreground.Name != "pi" {
+		return nested
+	}
+	return pid != t.Foreground.Pid
 }
 
-// nearestPi walks up from herdr-pr's parent to the first process named pi.
-func nearestPi(proc ProcFunc) (int, bool) {
+// nearestPi walks up from herdr-pr's parent to the first process named pi; nested reports another pi above it.
+func nearestPi(proc ProcFunc) (pi int, nested, ok bool) {
 	pid, _, err := proc(os.Getpid())
 	// The depth cap guards against a cycle from a pid reused mid-walk.
 	for depth := 0; err == nil && pid > 1 && depth < 64; depth++ {
 		var ppid int
 		var name string
 		if ppid, name, err = proc(pid); err == nil && name == "pi" {
-			return pid, true
+			if ok {
+				return pi, true, true
+			}
+			pi, ok = pid, true
 		}
 		pid = ppid
 	}
-	return 0, false
+	return pi, false, ok
 }
 
 // readProc reads /proc. The name is "pi" when either comm or argv[0]'s base name is pi,

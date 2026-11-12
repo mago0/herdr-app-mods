@@ -318,6 +318,17 @@ func (p *pass) revive(e *registry.Entry) {
 		}
 		return
 	}
+	// Two processes on one session file fork its history, so a session still open is never
+	// started again. The watch stays on and the PR is retried next pass.
+	open, err := deliver.SessionOpenIn(p.hc, e.Owner)
+	if err != nil {
+		p.errs = append(p.errs, fmt.Errorf("%s: find open session: %w", ref(e), err))
+		return
+	}
+	if open != "" {
+		p.errs = append(p.errs, fmt.Errorf("%s: not reviving: session %s is open in %s", ref(e), e.Owner.SessionID, open))
+		return
+	}
 	pl := p.parent(e)
 	if e.RevivedAs != "" && e.RevivedAtMs != 0 && p.now.Sub(time.UnixMilli(e.RevivedAtMs)) < startupWindow {
 		p.reviveFailed(e, pl, errors.New("revived session exited at startup"))

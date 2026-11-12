@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,8 @@ func (f *fakeHC) Run(s hc.RunSpec) (hc.Terminal, error) {
 	f.runs = append(f.runs, s)
 	return f.runAs, nil
 }
+
+func (f *fakeHC) List() ([]string, error) { return slices.Sorted(maps.Keys(f.terms)), nil }
 
 func (f *fakeHC) to(addr string) []string {
 	var out []string
@@ -296,6 +299,67 @@ func TestPollInProcessChildRevivedWithoutCheck(t *testing.T) {
 	run(t, d)
 	if len(c.runs) != 1 || load(t, d).RevivedAs != "t9" {
 		t.Errorf("runs = %+v", c.runs)
+	}
+}
+
+// A busy Pi owner mid tool call can show a shell in the foreground; its working status keeps it from being revived.
+func TestPollBusyOwnerWithShellForegroundNotRevived(t *testing.T) {
+	e := watched(t)
+	e.Owner.Kind, e.Owner.SessionFile = "pi", "/s/sid.jsonl"
+	d, c, gh := setup(t, e)
+	busy := term("t2", 12, "working")
+	busy.Status.App = "pi"
+	busy.Foreground = &struct {
+		Name string   `json:"name"`
+		Pid  int      `json:"pid"`
+		Argv []string `json:"argv"`
+		Cwd  string   `json:"cwd"`
+	}{Name: "bash"}
+	c.terms["t2"] = busy
+	gh.prs[prURL] = openPR(oldComment, review)
+	run(t, d)
+	if len(c.runs) != 0 || len(c.sends) != 0 {
+		t.Errorf("runs %+v sends %v", c.runs, c.sends)
+	}
+}
+
+// The owner looks gone, but its session is still open in another live terminal: starting it again would fork its history.
+func TestPollReviveSkippedWhenSessionOpen(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	delete(c.terms, "t2")
+	open := term("t7", 17, "working")
+	open.Labels = map[string]string{"herdr-pr.session": "sid"}
+	c.terms["t7"] = open
+	gh.prs[prURL] = openPR(oldComment, review)
+	err := Run(context.Background(), d)
+	if err == nil || !strings.Contains(err.Error(), "not reviving: session sid is open in t7") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(c.runs) != 0 || len(c.sends) != 0 {
+		t.Errorf("runs %+v sends %v", c.runs, c.sends)
+	}
+	if e := load(t, d); !e.Watched || e.ReviveFailed != "" || e.RevivedAs != "" || slices.Contains(e.Last.SeenIDs, "r1") {
+		t.Errorf("entry = %+v", e)
+	}
+}
+
+// hc run can return no created_ms; it is read back so the next pass does not take the new terminal for a reused address.
+func TestPollReviveReadsCreatedMsThenDelivers(t *testing.T) {
+	d, c, gh := setup(t, watched(t))
+	delete(c.terms, "t2")
+	c.runAs = hc.Terminal{Address: "t9", State: "live"}
+	c.terms["t9"] = term("t9", 99, "idle")
+	gh.prs[prURL] = openPR(oldComment, review)
+	run(t, d)
+	if e := load(t, d); e.RevivedAs != "t9" || e.RevivedCreatedMs != 99 {
+		t.Fatalf("entry = %+v", e)
+	}
+	run(t, d)
+	if got := c.to("t9"); !slices.Equal(got, []string{ownerMsg}) {
+		t.Errorf("revived owner got %q", got)
+	}
+	if e := load(t, d); e.ReviveFailed != "" || len(c.runs) != 1 {
+		t.Errorf("entry = %+v runs %+v", e, c.runs)
 	}
 }
 

@@ -33,6 +33,7 @@ func (fakeHC) Send(string, string) error { return errors.New("unexpected Send") 
 func (fakeHC) Run(hc.RunSpec) (hc.Terminal, error) {
 	return hc.Terminal{}, errors.New("unexpected Run")
 }
+func (fakeHC) List() ([]string, error) { return nil, errors.New("unexpected List") }
 
 type fakeGH struct {
 	prs   map[string]github.PR
