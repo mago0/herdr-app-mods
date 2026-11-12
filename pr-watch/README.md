@@ -87,7 +87,7 @@ A message starting `[herdr-pr]` is sent to the owner's terminal for:
 
 Not woken: comments by the `gh` viewer login or by bots, approvals and dismissed reviews (even with a body; inline comments on an approval still wake), passing CI, draft changes, anything already seen at link time.
 
-A busy owner is skipped and told on a later pass. Busy means status `working` or `blocked`, or no status yet for pi. Claude Code reports no status, so a Claude owner (foreground `claude`, or `node` running Claude) counts as ready once its terminal is 30 seconds old; a message sent while it works waits in its input. Any other program with no status, such as an editor or pager started after the agent exited, counts as busy, so nothing is typed into it. The owner's parent gets an FYI when it is ready.
+A busy owner is skipped and told on a later pass. Busy means status `working` or `blocked`, or no status yet for pi. Claude Code reports no status, so a Claude owner (foreground `claude`, or `node` running Claude) counts as ready once its terminal is 30 seconds old; a message sent while it works waits in its input. Any other program with no status, such as an editor or pager started after the agent exited, counts as busy, so nothing is typed into it. An owner counts as exited when a shell is in the foreground and its agent reports no status; a reported status outranks the foreground, since a busy agent's tool call can put a shell there. The owner's parent gets an FYI when it is ready.
 
 ## Merge or close
 
@@ -100,7 +100,7 @@ The watch ends on the pass that sees the PR merged or closed, with one message p
 
 ## Revival
 
-If the owner terminal is gone, `poll` starts the session again in a new background terminal in the agent's folder (`claude --resume <session>` or `pi --session <file>`), and delivers on the next pass. One session that owns several PRs is started once; all its PRs then go to that terminal. A pi child running inside its parent's pi has no terminal of its own; it is revived only after its session file has been unchanged for 10 minutes. If the revived session exits at startup, or cannot start, revival stops, the parent is told once, and the watch stays on. After fixing the cause, re-arm with:
+If the owner terminal is gone, `poll` starts the session again in a new background terminal in the agent's folder (`claude --resume <session>` or `pi --session <file>`), and delivers on the next pass. One session that owns several PRs is started once; all its PRs then go to that terminal. A pi child running inside its parent's pi has no terminal of its own; it is revived only after its session file has been unchanged for 10 minutes. A session still open in a live terminal (labelled `herdr-pr.session=<session>`, or with `--session` or `--resume` for it in its command line or foreground process) is never started a second time: `poll` logs it and the watch stays on. If the revived session exits at startup, or cannot start, revival stops, the parent is told once, and the watch stays on. After fixing the cause, re-arm with:
 
 ```sh
 herdr-pr watch <url>

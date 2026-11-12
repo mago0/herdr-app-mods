@@ -24,6 +24,7 @@ func (fakeHC) Send(string, string) error { return errors.New("unexpected Send") 
 func (fakeHC) Run(hc.RunSpec) (hc.Terminal, error) {
 	return hc.Terminal{}, errors.New("unexpected Run")
 }
+func (fakeHC) List() ([]string, error) { return nil, errors.New("unexpected List") }
 
 func envOf(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
@@ -99,6 +100,46 @@ func TestResolvePiInProcessChild(t *testing.T) {
 				t.Errorf("kind/session/file = %q/%q/%q", o.Kind, o.SessionID, o.SessionFile)
 			}
 		})
+	}
+}
+
+// subagentTree fakes a subagent's ancestry: self -> 50 (sh) -> 60 (pi, the subagent) -> 40 (pi) -> 1.
+func subagentTree(pid int) (int, string, error) {
+	switch pid {
+	case os.Getpid():
+		return 50, "herdr-pr", nil
+	case 50:
+		return 60, "sh", nil
+	case 60:
+		return 40, "pi", nil
+	case 40:
+		return 1, "pi", nil
+	}
+	return 0, "", errors.New("no such process")
+}
+
+// atuin's pty-proxy holds the foreground of a terminal it wraps, so the terminal's own pi never shows there.
+func TestResolvePiTopLevelUnderForegroundWrapper(t *testing.T) {
+	c := fakeHC{"t1": term("t1", 111, "atuin", 20, "", labels)}
+	env := envOf(map[string]string{"HC_TERMINAL_ID": "t1", "PI_SESSION_ID": "s1", "PI_SESSION_FILE": "/f.jsonl"})
+	o, err := Resolve(env, c, t.TempDir(), procTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Address != "t1" || o.CreatedMs != 111 || o.Parent != "" {
+		t.Errorf("address/created/parent = %q/%d/%q", o.Address, o.CreatedMs, o.Parent)
+	}
+}
+
+func TestResolvePiChildUnderForegroundWrapper(t *testing.T) {
+	c := fakeHC{"t1": term("t1", 111, "atuin", 20, "", labels)}
+	env := envOf(map[string]string{"HC_TERMINAL_ID": "t1", "PI_SESSION_ID": "child", "PI_SESSION_FILE": "/c.jsonl"})
+	o, err := Resolve(env, c, t.TempDir(), subagentTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Address != "" || o.CreatedMs != 0 || o.Parent != "t1" || o.ParentCreatedMs != 111 {
+		t.Errorf("address/created/parent/parentCreated = %q/%d/%q/%d", o.Address, o.CreatedMs, o.Parent, o.ParentCreatedMs)
 	}
 }
 

@@ -19,6 +19,7 @@ type Terminal struct {
 	Address   string            `json:"address"`
 	CreatedMs int64             `json:"created_ms"`
 	Cwd       string            `json:"cwd"`
+	Argv      []string          `json:"argv"`
 	State     string            `json:"state"`
 	Parent    *string           `json:"parent"`
 	Labels    map[string]string `json:"labels"`
@@ -47,6 +48,7 @@ type Client interface {
 	Get(addr string) (Terminal, error)
 	Send(addr, text string) error
 	Run(RunSpec) (Terminal, error)
+	List() ([]string, error)
 }
 
 type execClient struct{ bin string }
@@ -82,6 +84,27 @@ func (c execClient) Get(addr string) (Terminal, error) {
 		return Terminal{}, err
 	}
 	return parse(out)
+}
+
+// List returns the addresses of live terminals. `hc ls` gives only a summary; Get has the details.
+func (c execClient) List() ([]string, error) {
+	out, err := c.exec("ls", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var l struct {
+		Terminals []struct {
+			Address string `json:"address"`
+		} `json:"terminals"`
+	}
+	if err := json.Unmarshal(out, &l); err != nil {
+		return nil, fmt.Errorf("hc: parse ls output: %w", err)
+	}
+	addrs := make([]string, 0, len(l.Terminals))
+	for _, t := range l.Terminals {
+		addrs = append(addrs, t.Address)
+	}
+	return addrs, nil
 }
 
 func (c execClient) Send(addr, text string) error {

@@ -1,8 +1,11 @@
 package deliver
 
 import (
+	"errors"
+	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -61,18 +64,34 @@ func TestFinalParentMessageExact(t *testing.T) {
 	}
 }
 
+// fakeHC returns term for every address, or, when terms is set, the terminal at that address.
 type fakeHC struct {
 	term    hc.Terminal
+	terms   map[string]hc.Terminal
 	getErr  error
 	ran     hc.RunSpec
 	runTerm hc.Terminal
+	listErr error
 }
 
-func (f *fakeHC) Get(string) (hc.Terminal, error) { return f.term, f.getErr }
-func (f *fakeHC) Send(string, string) error       { return nil }
+func (f *fakeHC) Get(addr string) (hc.Terminal, error) {
+	if f.terms == nil {
+		return f.term, f.getErr
+	}
+	t, ok := f.terms[addr]
+	if !ok {
+		return hc.Terminal{}, hc.ErrNotFound
+	}
+	return t, nil
+}
+func (f *fakeHC) Send(string, string) error { return nil }
 func (f *fakeHC) Run(s hc.RunSpec) (hc.Terminal, error) {
 	f.ran = s
 	return f.runTerm, nil
+}
+func (f *fakeHC) List() ([]string, error) {
+	addrs := slices.Sorted(maps.Keys(f.terms))
+	return addrs, f.listErr
 }
 
 type status = struct {
@@ -135,6 +154,35 @@ func TestCheckShellForegroundIsGone(t *testing.T) {
 		if got, _, err := Check(&fakeHC{term: term}, "t1", 5, now); err != nil || got != Gone {
 			t.Errorf("%s: got %v %v", sh, got, err)
 		}
+	}
+}
+
+// A busy agent's tool call can put a shell, or a wrapper like atuin, in the foreground.
+// The status the agent reports outranks it, so the owner is never taken for exited.
+func TestCheckReportedStatusOutranksForeground(t *testing.T) {
+	for _, tc := range []struct {
+		fg, state string
+		want      Liveness
+	}{
+		{"bash", "working", Busy},
+		{"zsh", "blocked", Busy},
+		{"sh", "done", Live},
+		{"fish", "idle", Live},
+		{"atuin", "working", Busy},
+		{"sleep", "working", Busy},
+	} {
+		term := hc.Terminal{State: "live", CreatedMs: 5, Status: &status{App: "pi", State: tc.state}, Foreground: fg(tc.fg)}
+		if got, _, err := Check(&fakeHC{term: term}, "t1", 5, now); err != nil || got != tc.want {
+			t.Errorf("%s %s: got %v %v, want %v", tc.fg, tc.state, got, err, tc.want)
+		}
+	}
+}
+
+// An agent that quit back to its shell prompt reports no status: that is a real exit.
+func TestCheckShellForegroundNoStatusIsGone(t *testing.T) {
+	term := hc.Terminal{State: "live", CreatedMs: 5, Foreground: fg("zsh")}
+	if got, _, err := Check(&fakeHC{term: term}, "t1", 5, now); err != nil || got != Gone {
+		t.Errorf("got %v %v", got, err)
 	}
 }
 
@@ -249,5 +297,75 @@ func TestReviveCwdMissing(t *testing.T) {
 	}
 	if f.ran.Argv != nil {
 		t.Error("Run was called")
+	}
+}
+
+func TestReviveReadsCreatedMsBack(t *testing.T) {
+	f := &fakeHC{runTerm: hc.Terminal{Address: "t9"}, terms: map[string]hc.Terminal{"t9": {Address: "t9", CreatedMs: 99, State: "live"}}}
+	got, err := Revive(f, reviveEntry(t, "pi"), true)
+	if err != nil || got.Address != "t9" || got.CreatedMs != 99 {
+		t.Errorf("got %+v %v", got, err)
+	}
+}
+
+func TestReviveCreatedMsReadFailureKeepsTerminal(t *testing.T) {
+	f := &fakeHC{runTerm: hc.Terminal{Address: "t9"}, terms: map[string]hc.Terminal{}}
+	got, err := Revive(f, reviveEntry(t, "pi"), true)
+	if err != nil || got.Address != "t9" || got.CreatedMs != 0 {
+		t.Errorf("got %+v %v", got, err)
+	}
+}
+
+func pi(argv ...string) *struct {
+	Name string   `json:"name"`
+	Pid  int      `json:"pid"`
+	Argv []string `json:"argv"`
+	Cwd  string   `json:"cwd"`
+} {
+	f := fg("pi")
+	f.Argv = argv
+	return f
+}
+
+func TestSessionOpenIn(t *testing.T) {
+	o := registry.Owner{Kind: "pi", SessionID: "sid", SessionFile: "/s/f.jsonl"}
+	working := &status{App: "pi", State: "working"}
+	for name, tc := range map[string]struct {
+		term hc.Terminal
+		want string
+	}{
+		"revived terminal by label":        {hc.Terminal{State: "live", Labels: map[string]string{"herdr-pr.session": "sid"}, Status: working}, "t5"},
+		"launch argv --session file":       {hc.Terminal{State: "live", Argv: []string{"pi", "--session", "/s/f.jsonl"}, Status: working}, "t5"},
+		"launch argv in a shell wrapper":   {hc.Terminal{State: "live", Argv: []string{"/usr/bin/zsh", "-ic", `"$@"; exec "$0" -i`, "/usr/bin/zsh", "pi", "--session", "sid"}, Foreground: fg("atuin"), Status: working}, "t5"},
+		"foreground argv --session id":     {hc.Terminal{State: "live", Argv: []string{"/usr/bin/zsh"}, Foreground: pi("pi", "--session=sid")}, "t5"},
+		"claude --resume":                  {hc.Terminal{State: "live", Argv: []string{"claude", "--resume", "sid"}}, "t5"},
+		"busy agent with shell foreground": {hc.Terminal{State: "live", Labels: map[string]string{"herdr-pr.session": "sid"}, Foreground: fg("bash"), Status: working}, "t5"},
+		"other session":                    {hc.Terminal{State: "live", Argv: []string{"pi", "--session", "/s/other.jsonl"}, Labels: map[string]string{"herdr-pr.session": "other"}}, ""},
+		"no session mark":                  {hc.Terminal{State: "live", Argv: []string{"pi", "task"}, Status: working}, ""},
+		"finished":                         {hc.Terminal{State: "finished", Labels: map[string]string{"herdr-pr.session": "sid"}}, ""},
+		// The agent quit to its shell prompt, so the session is closed although the launch argv names it.
+		"exited to shell": {hc.Terminal{State: "live", Argv: []string{"zsh", "-ic", "pi --session sid; exec zsh", "pi", "--session", "sid"}, Foreground: fg("zsh")}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeHC{terms: map[string]hc.Terminal{"t5": tc.term, "t6": {State: "live", Argv: []string{"/usr/bin/zsh"}}}}
+			got, err := SessionOpenIn(f, o)
+			if err != nil || got != tc.want {
+				t.Errorf("got %q %v, want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestSessionOpenInNoSessionID(t *testing.T) {
+	f := &fakeHC{terms: map[string]hc.Terminal{"t5": {State: "live"}}, listErr: errors.New("List called")}
+	if got, err := SessionOpenIn(f, registry.Owner{Kind: "pi"}); err != nil || got != "" {
+		t.Errorf("got %q %v", got, err)
+	}
+}
+
+func TestSessionOpenInListError(t *testing.T) {
+	f := &fakeHC{terms: map[string]hc.Terminal{}, listErr: errors.New("hc broke")}
+	if _, err := SessionOpenIn(f, registry.Owner{SessionID: "sid"}); err == nil {
+		t.Error("want error")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -54,10 +55,29 @@ func TestGetParses(t *testing.T) {
 	if got.Status == nil || got.Status.State != "working" || got.Status.App != "pi" {
 		t.Errorf("status = %+v", got.Status)
 	}
+	if !slices.Equal(got.Argv, []string{"/usr/bin/zsh"}) {
+		t.Errorf("argv = %v", got.Argv)
+	}
 	if got.State != "live" || got.Parent != nil || got.Labels["herdr.space"] != "spde9e" {
 		t.Errorf("state/parent/labels = %q %v %v", got.State, got.Parent, got.Labels)
 	}
 	if want := "get t1 --json"; readLog(t, logPath) != want {
+		t.Errorf("argv = %q, want %q", readLog(t, logPath), want)
+	}
+}
+
+const lsFixture = `{"hidden_finished":22,"terminals":[{"address":"t1z","agent":"pi","cwd":"/home/mattw/Projects/flosports","state":"live","status":"done","turn":682,"where":"SRE Review Monitor / 1"},{"address":"t11y","agent":"pi","cwd":"/w","state":"live","status":"working","turn":32,"where":"w / 1"}]}`
+
+func TestListParses(t *testing.T) {
+	c, logPath := fakeHC(t, lsFixture, 0)
+	got, err := c.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"t1z", "t11y"}; !slices.Equal(got, want) {
+		t.Errorf("addresses = %v, want %v", got, want)
+	}
+	if want := "ls --json"; readLog(t, logPath) != want {
 		t.Errorf("argv = %q, want %q", readLog(t, logPath), want)
 	}
 }
